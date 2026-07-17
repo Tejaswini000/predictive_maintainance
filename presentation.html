@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic AI Predictive Maintenance Presentation</title>
+    <style>
+        :root {
+            --bg-1: #04111f;
+            --bg-2: #0b1b2f;
+            --bg-3: #10253f;
+            --glass: rgba(255, 255, 255, 0.08);
+            --glass-strong: rgba(255, 255, 255, 0.12);
+            --border: rgba(255, 255, 255, 0.18);
+            --text: #f8fbff;
+            --muted: #c8d7ea;
+            --cyan: #22d3ee;
+            --blue: #38bdf8;
+            --amber: #fbbf24;
+            --rose: #fb7185;
+            --green: #34d399;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
+            overflow: hidden;
+            color: var(--text);
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(34, 211, 238, 0.18), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.16), transparent 26%),
+                linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3));
+        }
+
+        .progress-line {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 0%;
+            height: 4px;
+            z-index: 20;
+            background: linear-gradient(90deg, var(--cyan), var(--blue), var(--amber));
+            transition: width 0.35s ease;
+        }
+
+        .slide-counter {
+            position: fixed;
+            top: 22px;
+            right: 24px;
+            z-index: 20;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            backdrop-filter: blur(16px);
+            color: var(--muted);
+            font-size: 0.92rem;
+            letter-spacing: 0.08em;
+        }
+
+        .presentation {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .slide {
+            position: absolute;
+            inset: 0;
+            padding: 72px 72px 96px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transform: translateX(64px) scale(0.98);
+            pointer-events: none;
+            transition: opacity 0.55s ease, transform 0.55s ease;
+        }
+
+        .slide.active {
+            opacity: 1;
+            transform: translateX(0) scale(1);
+            pointer-events: auto;
+            z-index: 3;
+        }
+
+        .glass {
+            width: min(1120px, 100%);
+            border-radius: 30px;
+            border: 1px solid var(--border);
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.32);
+            padding: 40px;
+        }
+
+        .title-kicker {
+            text-transform: uppercase;
+            letter-spacing: 0.28em;
+            color: #8ce8f7;
+            font-size: 0.84rem;
+            margin-bottom: 18px;
+        }
+
+        .gradient-title {
+            margin: 0 0 18px;
+            background: linear-gradient(90deg, var(--cyan), var(--blue), var(--amber));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .hero-title {
+            font-size: clamp(2.8rem, 5vw, 4.8rem);
+            line-height: 1.04;
+        }
+
+        .section-title {
+            font-size: clamp(2rem, 3.4vw, 3.4rem);
+            line-height: 1.08;
+        }
+
+        p, li {
+            color: var(--muted);
+            font-size: 1.04rem;
+            line-height: 1.7;
+        }
+
+        .lead {
+            font-size: 1.16rem;
+            max-width: 920px;
+        }
+
+        .center {
+            text-align: center;
+        }
+
+        .badge-row,
+        .pill-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-top: 28px;
+        }
+
+        .badge,
+        .pill {
+            padding: 12px 18px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text);
+            font-size: 0.95rem;
+        }
+
+        .grid-2,
+        .grid-3,
+        .grid-4 {
+            display: grid;
+            gap: 20px;
+        }
+
+        .grid-2 {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .grid-3 {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .grid-4 {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .card {
+            height: 100%;
+            padding: 24px;
+            border-radius: 22px;
+            border: 1px solid var(--border);
+            background: var(--glass);
+            transition: transform 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-6px);
+            border-color: rgba(56, 189, 248, 0.5);
+            box-shadow: 0 18px 40px rgba(56, 189, 248, 0.12);
+        }
+
+        .card h3,
+        .card h4 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: var(--text);
+        }
+
+        .impact-box {
+            margin-top: 28px;
+            padding: 22px 24px;
+            border-radius: 22px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .architecture-stack {
+            display: grid;
+            gap: 14px;
+            margin-top: 18px;
+        }
+
+        .architecture-box {
+            padding: 18px 20px;
+            text-align: center;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+
+        .subsystems {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .arrow-down {
+            text-align: center;
+            font-size: 1.5rem;
+            color: var(--cyan);
+        }
+
+        .workflow-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 20px 28px;
+            margin-top: 12px;
+        }
+
+        .workflow-step {
+            position: relative;
+            padding-left: 58px;
+        }
+
+        .workflow-step::before {
+            content: attr(data-step);
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-weight: 700;
+            color: #04111f;
+            background: linear-gradient(135deg, var(--cyan), var(--amber));
+        }
+
+        .workflow-step h4 {
+            margin: 0 0 8px;
+        }
+
+        .nav-btn {
+            position: fixed;
+            bottom: 24px;
+            z-index: 20;
+            width: 56px;
+            height: 56px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.08);
+            color: white;
+            font-size: 1.3rem;
+            cursor: pointer;
+            backdrop-filter: blur(14px);
+            transition: transform 0.25s ease, background 0.25s ease, opacity 0.25s ease;
+        }
+
+        .nav-btn:hover:not(:disabled) {
+            transform: translateY(-3px) scale(1.04);
+            background: linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(251, 191, 36, 0.22));
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        #prevBtn {
+            right: 92px;
+        }
+
+        #nextBtn {
+            right: 24px;
+        }
+
+        ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        @media (max-width: 1100px) {
+            .slide {
+                padding: 72px 24px 96px;
+                overflow-y: auto;
+            }
+
+            .grid-3,
+            .subsystems {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 820px) {
+            body {
+                overflow: auto;
+            }
+
+            .slide {
+                position: static;
+                min-height: 100vh;
+                padding: 80px 14px 96px;
+                opacity: 0;
+                display: none;
+                transform: none;
+            }
+
+            .slide.active {
+                display: flex;
+                opacity: 1;
+            }
+
+            .glass {
+                padding: 24px 18px;
+                border-radius: 24px;
+            }
+
+            .grid-2,
+            .grid-3,
+            .grid-4,
+            .subsystems,
+            .workflow-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .slide-counter {
+                top: 14px;
+                right: 14px;
+            }
+
+            #prevBtn {
+                right: 82px;
+            }
+
+            #nextBtn {
+                right: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="progress-line" id="progressLine"></div>
+    <div class="slide-counter" id="slideCounter">01 / 07</div>
+
+    <main class="presentation">
+        <section class="slide active">
+            <div class="glass center">
+                <div class="title-kicker">Real-Time Industrial Intelligence</div>
+                <h1 class="gradient-title hero-title">Agentic AI-Based Predictive Maintenance Dashboard for Industrial Machines</h1>
+                <p class="lead">
+                    A real-time predictive maintenance platform that takes dataset or simulated sensor input, preprocesses it, predicts machine condition using ML, and uses an LLM orchestrator to activate the right agents for normal, warning, or critical cases.
+                </p>
+                <div class="badge-row" style="justify-content:center;">
+                    <span class="badge">Streamlit Dashboard</span>
+                    <span class="badge">LLM-Orchestrated Agents</span>
+                    <span class="badge">Live and CSV Data Support</span>
+                    <span class="badge">ML Condition Prediction</span>
+                    <span class="badge">Industrial Monitoring</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="slide">
+            <div class="glass">
+                <h2 class="gradient-title section-title">Problem Statement</h2>
+                <p class="lead">
+                    Industrial machines often fail without enough warning. Traditional maintenance is either reactive or schedule-based, which leads to unplanned downtime, unnecessary servicing, and poor visibility into developing machine risk.
+                </p>
+                <div class="grid-4" style="margin-top: 24px;">
+                    <div class="card">
+                        <h3>Unexpected Breakdowns</h3>
+                        <p>Failures interrupt production and create expensive emergency maintenance situations.</p>
+                    </div>
+                    <div class="card">
+                        <h3>High Maintenance Cost</h3>
+                        <p>Routine servicing may happen too early while hidden problems still develop between inspections.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Limited Condition Visibility</h3>
+                        <p>Operators do not always have a clear picture of machine health across multiple assets.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Slow Decision Making</h3>
+                        <p>Teams need diagnostic context and action guidance, not just raw sensor values.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="slide">
+            <div class="glass">
+                <h2 class="gradient-title section-title">How the System Solves It</h2>
+                <div class="grid-3" style="margin-top: 24px;">
+                    <div class="card">
+                        <h3>Real-Time Monitoring</h3>
+                        <p>Tracks machine status continuously using live or uploaded sensor readings and surfaces abnormal conditions early.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Agentic AI Reasoning</h3>
+                        <p>Uses an LLM orchestrator to decide which agents should run after the ML model predicts Normal, Warning, or Critical condition.</p>
+                    </div>
+                    <div class="card">
+                        <h3>Actionable Outputs</h3>
+                        <p>Transforms sensor behavior into condition labels, activated agent outputs, root causes, recommended actions, repair steps, and dashboard updates.</p>
+                    </div>
+                </div>
+                <div class="impact-box">
+                    <h3 style="margin-top:0; color:#8ce8f7;">Project Value</h3>
+                    <p style="margin-bottom:0;">
+                        The dashboard helps reduce downtime, lower maintenance cost, improve operational efficiency, and enable data-driven decisions through intelligent condition-based maintenance.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <section class="slide">
+            <div class="glass">
+                <h2 class="gradient-title section-title center">Project Architecture</h2>
+                <div class="architecture-stack">
+                    <div class="architecture-box">Input Layer<br><small>Dataset upload or simulated temperature, vibration, and pressure data</small></div>
+                    <div class="arrow-down">&darr;</div>
+                    <div class="architecture-box">Preprocessing Layer<br><small>Cleaning, normalization, and preparation for analysis</small></div>
+                    <div class="arrow-down">&darr;</div>
+                    <div class="architecture-box">Machine Learning Model<br><small>Predicts condition signal: Normal, Warning, or Critical</small></div>
+                    <div class="arrow-down">&darr;</div>
+                    <div class="architecture-box">LLM Orchestrator<br><small>Reads the ML output and activates agents based on severity</small></div>
+                    <div class="subsystems">
+                        <div class="architecture-box">Normal Path<br><small>Monitoring Agent updates healthy status</small></div>
+                        <div class="architecture-box">Warning Path<br><small>Diagnostic Agent and Decision Agent run</small></div>
+                        <div class="architecture-box">Critical Path<br><small>Monitoring, Diagnostic, Decision, and Maintenance Planner run in sequence</small></div>
+                        <div class="architecture-box">Chat Agent<br><small>Available separately only when the user asks questions</small></div>
+                    </div>
+                    <div class="arrow-down">&darr;</div>
+                    <div class="architecture-box">Dashboard and Storage Layer<br><small>Status, explanations, actions, repair steps, predictions, and historical results</small></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="slide">
+            <div class="glass">
+                <h2 class="gradient-title section-title">Project Workflow</h2>
+                <div class="workflow-grid">
+                    <div class="workflow-step" data-step="1">
+                        <h4>Input Data</h4>
+                        <p>The system takes input from a dataset or simulated sensor readings such as temperature, vibration, and pressure.</p>
+                    </div>
+                    <div class="workflow-step" data-step="2">
+                        <h4>Preprocess Data</h4>
+                        <p>The raw data is cleaned, normalized, and prepared so it can be used reliably for analysis.</p>
+                    </div>
+                    <div class="workflow-step" data-step="3">
+                        <h4>Predict Condition</h4>
+                        <p>The ML model predicts the machine condition as Normal, Warning, or Critical. It gives a signal, not the final decision.</p>
+                    </div>
+                    <div class="workflow-step" data-step="4">
+                        <h4>Orchestrate Agents</h4>
+                        <p>The LLM orchestrator reads the ML output and decides which agents should be activated for the current condition.</p>
+                    </div>
+                    <div class="workflow-step" data-step="5">
+                        <h4>Normal Condition</h4>
+                        <p>Only the Monitoring Agent is active, and the dashboard is updated directly with a healthy machine status.</p>
+                    </div>
+                    <div class="workflow-step" data-step="6">
+                        <h4>Warning Condition</h4>
+                        <p>The Diagnostic Agent identifies the possible issue, and the Decision Agent suggests preventive actions.</p>
+                    </div>
+                    <div class="workflow-step" data-step="7">
+                        <h4>Critical Condition</h4>
+                        <p>All agents run in sequence: monitoring confirms the issue, diagnostics find the root cause, decisions choose actions like stopping the machine, and the planner gives repair steps.</p>
+                    </div>
+                    <div class="workflow-step" data-step="8">
+                        <h4>Dashboard, Chat, and Storage</h4>
+                        <p>Results are shown on the dashboard, the Chat Agent answers user questions separately, and all data, predictions, and outputs are stored for future use.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="slide">
+            <div class="glass">
+                <h2 class="gradient-title section-title">Key Features and Technologies</h2>
+                <div class="grid-3" style="margin-top: 24px;">
+                    <div class="card">
+                        <h3>Core Features</h3>
+                        <ul>
+                            <li>Dataset and simulated sensor input</li>
+                            <li>Data cleaning and normalization</li>
+                            <li>ML-based condition prediction</li>
+                            <li>Dashboard status updates</li>
+                            <li>Automated maintenance reports</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>Agentic AI Features</h3>
+                        <ul>
+                            <li>Monitoring Agent</li>
+                            <li>Diagnostic Agent</li>
+                            <li>Decision Agent</li>
+                            <li>Maintenance Planner</li>
+                            <li>LLM orchestrator and separate Chat Agent</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>Technology Stack</h3>
+                        <ul>
+                            <li>Frontend: Streamlit</li>
+                            <li>Backend: Python</li>
+                            <li>Data: Pandas</li>
+                            <li>Charts: Plotly</li>
+                            <li>Storage: historical records</li>
+                            <li>AI: OpenRouter LLM</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="slide">
+            <div class="glass">
+                <h2 class="gradient-title section-title">Outcome and Future Improvements</h2>
+                <div class="grid-2" style="margin-top: 24px;">
+                    <div class="card">
+                        <h3>Current Outcome</h3>
+                        <ul>
+                            <li>Early detection of machine issues</li>
+                            <li>Reduced downtime and faster response</li>
+                            <li>Improved operational efficiency</li>
+                            <li>Smarter maintenance planning through AI guidance</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>Future Improvements</h3>
+                        <ul>
+                            <li>Live IoT platform integration</li>
+                            <li>More advanced time-series prediction models</li>
+                            <li>ERP or CMMS work-order integration</li>
+                            <li>Support for more machines and sensor types</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="pill-row">
+                    <span class="pill">Condition-Based Maintenance</span>
+                    <span class="pill">Data-Driven Decisions</span>
+                    <span class="pill">Industrial AI Workflow</span>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <button class="nav-btn" id="prevBtn" aria-label="Previous slide">&#8592;</button>
+    <button class="nav-btn" id="nextBtn" aria-label="Next slide">&#8594;</button>
+
+    <script>
+        const slides = document.querySelectorAll(".slide");
+        const prevBtn = document.getElementById("prevBtn");
+        const nextBtn = document.getElementById("nextBtn");
+        const progressLine = document.getElementById("progressLine");
+        const slideCounter = document.getElementById("slideCounter");
+        let currentSlide = 0;
+
+        function showSlide(index) {
+            slides.forEach((slide) => slide.classList.remove("active"));
+            slides[index].classList.add("active");
+            prevBtn.disabled = index === 0;
+            nextBtn.disabled = index === slides.length - 1;
+            progressLine.style.width = ((index + 1) / slides.length) * 100 + "%";
+            slideCounter.textContent =
+                String(index + 1).padStart(2, "0") + " / " + String(slides.length).padStart(2, "0");
+        }
+
+        function nextSlide() {
+            if (currentSlide < slides.length - 1) {
+                currentSlide += 1;
+                showSlide(currentSlide);
+            }
+        }
+
+        function prevSlideAction() {
+            if (currentSlide > 0) {
+                currentSlide -= 1;
+                showSlide(currentSlide);
+            }
+        }
+
+        nextBtn.addEventListener("click", nextSlide);
+        prevBtn.addEventListener("click", prevSlideAction);
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "ArrowRight" || event.key === " ") {
+                event.preventDefault();
+                nextSlide();
+            }
+            if (event.key === "ArrowLeft") {
+                prevSlideAction();
+            }
+        });
+
+        showSlide(currentSlide);
+    </script>
+</body>
+</html>

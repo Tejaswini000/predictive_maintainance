@@ -1,0 +1,7 @@
+openai>=1.30.0
+python-dotenv>=1.0.1
+streamlit>=1.32.0
+plotly>=5.20.0
+pandas>=2.2.0
+streamlit-autorefresh>=1.0.1
+fpdf2>=2.7.0
