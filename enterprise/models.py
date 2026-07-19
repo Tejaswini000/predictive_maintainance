@@ -135,6 +135,18 @@ class MachineInfo:
     last_maintenance_date: Optional[datetime] = None
     next_maintenance_date: Optional[datetime] = None
     supported_sensors: List[SensorType] = field(default_factory=list)
+    # Extended fields from Excel master data
+    serial_number: str = ""
+    color: str = ""
+    purchase_date: Optional[datetime] = None
+    warranty_expiry: Optional[datetime] = None
+    supplier: str = ""
+    purchase_cost: float = 0.0
+    location: str = ""
+    department: str = ""
+    assigned_technician: str = ""
+    capacity: str = ""
+    power_rating: str = ""
 
     @property
     def machine_category(self) -> str:
@@ -157,7 +169,18 @@ class MachineInfo:
             "failure_probability": self.failure_probability,
             "last_maintenance_date": self.last_maintenance_date.isoformat() if self.last_maintenance_date else None,
             "next_maintenance_date": self.next_maintenance_date.isoformat() if self.next_maintenance_date else None,
-            "supported_sensors": [s.value for s in self.supported_sensors]
+            "supported_sensors": [s.value for s in self.supported_sensors],
+            "serial_number": self.serial_number,
+            "color": self.color,
+            "purchase_date": self.purchase_date.isoformat() if self.purchase_date else None,
+            "warranty_expiry": self.warranty_expiry.isoformat() if self.warranty_expiry else None,
+            "supplier": self.supplier,
+            "purchase_cost": self.purchase_cost,
+            "location": self.location,
+            "department": self.department,
+            "assigned_technician": self.assigned_technician,
+            "capacity": self.capacity,
+            "power_rating": self.power_rating,
         }
 
 

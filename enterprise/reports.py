@@ -184,23 +184,32 @@ class ReportGenerator:
         }
 
     def _alert_statistics(self, alerts: List[Alert]) -> Dict[str, Any]:
-        """Generate alert statistics."""
-        if not alerts:
-            return {
-                "total": 0,
-                "open": 0,
-                "resolved": 0,
-                "critical": 0,
-                "warning": 0,
-                "info": 0
-            }
+        """
+        Generate mathematically consistent alert statistics.
+        
+        Rules:
+        - total:     All alerts in the provided list
+        - open:      Alerts where status == 'Open'
+        - closed:    Alerts where status == 'Closed' or 'Resolved'
+        - critical:  OPEN alerts where severity == CRITICAL
+        - warning:   OPEN alerts where severity == WARNING
+        - info:      OPEN alerts where severity == INFO
+        
+        Invariants:
+        - open == critical + warning + info
+        - total == open + closed
+        """
+        total = len(alerts)
+        open_alerts = [a for a in alerts if a.status == "Open"]
+        closed_alerts = [a for a in alerts if a.status in ("Closed", "Resolved")]
+        
         return {
-            "total": len(alerts),
-            "open": sum(1 for a in alerts if a.status == "Open"),
-            "resolved": sum(1 for a in alerts if a.status == "Resolved"),
-            "critical": sum(1 for a in alerts if a.severity == AlertSeverity.CRITICAL),
-            "warning": sum(1 for a in alerts if a.severity == AlertSeverity.WARNING),
-            "info": sum(1 for a in alerts if a.severity == AlertSeverity.INFO)
+            "total": total,
+            "open": len(open_alerts),
+            "closed": len(closed_alerts),
+            "critical": sum(1 for a in open_alerts if a.severity == AlertSeverity.CRITICAL),
+            "warning": sum(1 for a in open_alerts if a.severity == AlertSeverity.WARNING),
+            "info": sum(1 for a in open_alerts if a.severity == AlertSeverity.INFO)
         }
 
     def _technician_statistics(self, logs: List[MaintenanceLog]) -> List[Dict[str, Any]]:

@@ -1,14 +1,16 @@
-"""
+""""
 Enterprise Simulation Engine for Predictive Maintenance Platform
 
 Generates realistic sensor data for multiple factories, production lines,
 and machine types. Reuses the existing data_ingestion pattern.
 Extends it with multi-machine, multi-sensor support.
+All machine data is persisted in SQLite via the DatabaseManager.
 """
 
 import random
 import math
-from typing import Dict, List, Optional, Tuple,Any
+import sys
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 
 from models import (
@@ -16,6 +18,8 @@ from models import (
     AlertSeverity, MACHINE_TYPE_SENSORS,
     get_machine_type_sensors, get_sensor_list
 )
+from database import DatabaseManager
+from data_loader import get_machine_data, MACHINES_XLSX_PATH
 
 
 # ==================== EQUIPMENT CONFIGURATION ====================
@@ -117,83 +121,72 @@ class EnterpriseSimulator:
         self._initialize_factories()
     
     def _initialize_factories(self):
-        """Initialize the equipment-category inventory from the new fleet configuration."""
-        for category in DEFAULT_MACHINE_CONFIG:
-            category_id = category["category_id"]
-            lines = {}
-            for machine_config in category["machines"]:
-                machine_id = machine_config["id"]
-                machine_type = machine_config["type"]
-                sensor_config = get_machine_type_sensors(machine_type)
-
-                supported_sensors = []
-                sensor_name_map = {
-                    "temperature": SensorType.TEMPERATURE,
-                    "pressure": SensorType.PRESSURE,
-                    "vibration": SensorType.VIBRATION,
-                    "noise_level": SensorType.NOISE_LEVEL,
-                    "rpm": SensorType.RPM,
-                    "humidity": SensorType.HUMIDITY,
-                    "oil_level": SensorType.OIL_LEVEL,
-                    "flow_rate": SensorType.FLOW_RATE,
-                    "power_consumption": SensorType.POWER_CONSUMPTION,
-                    "voltage": SensorType.VOLTAGE,
-                    "current": SensorType.CURRENT,
-                    "door_status": SensorType.DOOR_STATUS,
-                    "compressor_current": SensorType.COMPRESSOR_CURRENT,
-                    "motor_rpm": SensorType.MOTOR_RPM,
-                    "water_level": SensorType.WATER_LEVEL,
-                    "oil_pressure": SensorType.OIL_PRESSURE,
-                    "coolant_temperature": SensorType.COOLANT_TEMPERATURE,
-                    "engine_rpm": SensorType.ENGINE_RPM,
-                    "fuel_level": SensorType.FUEL_LEVEL,
-                    "battery_voltage": SensorType.BATTERY_VOLTAGE,
-                    "room_temperature": SensorType.ROOM_TEMPERATURE,
-                    "compressor_temperature": SensorType.COMPRESSOR_TEMPERATURE,
-                    "fan_speed": SensorType.FAN_SPEED,
-                    "motor_current": SensorType.MOTOR_CURRENT,
-                    "door_sensor": SensorType.DOOR_SENSOR,
-                    "speed": SensorType.SPEED,
-                    "power_output": SensorType.POWER_OUTPUT,
-                    "efficiency": SensorType.EFFICIENCY,
-                    "load": SensorType.LOAD,
+        """Initialize the equipment-category inventory from the Excel file.
+        
+        Loads machine data from data/machines.xlsx.
+        If the file is missing or unreadable, shows a friendly error.
+        On first run (Machines table empty), seeds the database with Excel data.
+        On subsequent runs, loads existing machine data from SQLite.
+        """
+        db = DatabaseManager()
+        
+        # Check if machines already exist in the database
+        if db.get_machine_count() > 0:
+            # Load existing machines from SQLite
+            db_machines = db.get_all_machines()
+            for machine in db_machines:
+                self.machines[machine.machine_id] = machine
+                self._health_trends[machine.machine_id] = machine.health_score
+                self._failure_prob_trends[machine.machine_id] = machine.failure_probability
+                
+                # Rebuild factory structure
+                factory_id = machine.factory_id
+                if factory_id not in self.factories:
+                    self.factories[factory_id] = {
+                        "name": factory_id,
+                        "location": "",
+                        "lines": {}
+                    }
+                self.factories[factory_id]["lines"][machine.machine_id] = {
+                    "name": machine.name,
+                    "machines": [machine]
                 }
+            return
 
-                for sensor_name in sensor_config:
-                    if sensor_name in sensor_name_map:
-                        supported_sensors.append(sensor_name_map[sensor_name])
+        # First run: load machines from the Excel file
+        excel_machines = get_machine_data()
+        
+        if not excel_machines:
+            # Excel file not found or empty - show user-friendly message
+            error_msg = (
+                "Machine master file not found or could not be read.\n\n"
+                f"Expected location: {MACHINES_XLSX_PATH}\n\n"
+                "Please place machines.xlsx inside the data folder and restart the application."
+            )
+            print(f"ERROR: {error_msg}", file=sys.stderr)
+            return
 
-                install_days = random.randint(365, 1825)
-                install_date = datetime.now() - timedelta(days=install_days)
-
-                machine = MachineInfo(
-                    machine_id=machine_id,
-                    name=generate_machine_name(machine_id, machine_type),
-                    machine_type=machine_type,
-                    production_line="",
-                    factory_id=category_id,
-                    manufacturer=machine_config["manufacturer"],
-                    model_number=machine_config["model"],
-                    installation_date=install_date,
-                    operating_hours=random.uniform(1000, 20000),
-                    status=MachineStatus.NORMAL,
-                    health_score=random.uniform(72, 100),
-                    failure_probability=round(random.uniform(0.01, 0.25), 3),
-                    last_maintenance_date=datetime.now() - timedelta(days=random.randint(7, 90)),
-                    next_maintenance_date=datetime.now() + timedelta(days=random.randint(7, 60)),
-                    supported_sensors=supported_sensors
-                )
-
-                self.machines[machine_id] = machine
-                self._health_trends[machine_id] = machine.health_score
-                self._failure_prob_trends[machine_id] = machine.failure_probability
-                lines[machine_id] = {"name": machine.name, "machines": [machine]}
-
-            self.factories[category_id] = {
-                "name": category["name"],
-                "location": "",
-                "lines": lines
+        # Build factory/category structure from Excel data
+        for machine in excel_machines:
+            self.machines[machine.machine_id] = machine
+            self._health_trends[machine.machine_id] = machine.health_score
+            self._failure_prob_trends[machine.machine_id] = machine.failure_probability
+            
+            factory_id = machine.factory_id or "Uncategorized"
+            
+            if factory_id not in self.factories:
+                self.factories[factory_id] = {
+                    "name": factory_id,
+                    "location": "",
+                    "lines": {}
+                }
+            self.factories[factory_id]["lines"][machine.machine_id] = {
+                "name": machine.name,
+                "machines": [machine]
             }
+
+        # Seed the database with the loaded machines
+        db.seed_machines(list(self.machines.values()))
     
     def get_all_factories(self) -> Dict[str, Dict]:
         """Get all equipment categories as a compatibility view of the fleet."""
@@ -379,49 +372,94 @@ class EnterpriseSimulator:
     # ==================== HEALTH SIMULATION ====================
     
     def simulate_health_degradation(self):
-        """Simulate health changes for all machines over time."""
-        from services import get_data_store
+        """Simulate a completely new monitoring cycle for all machines.
+        
+        Every call produces a visibly new system state. For each machine:
+        
+        1. Applies realistic state transitions based on current status:
+           NORMAL   → NORMAL (60%) | WARNING (40%)
+           WARNING  → NORMAL (25%) | WARNING (45%) | CRITICAL (30%)
+           CRITICAL → WARNING (40%) | NORMAL (after maintenance, 30%) | CRITICAL (30%)
+        
+        2. Recalculates Health Score, Failure Probability, and Status.
+        
+        3. All derived data (alerts, work orders, maintenance logs) is
+           synchronized via the SynchronizationEngine.
+        
+        Single source of truth: machine.status is the authoritative state.
+        """
+        from services import get_data_store, get_sync_engine
         data_store = get_data_store()
+        sync_engine = get_sync_engine()
+        db = DatabaseManager()
 
         for machine_id, machine in self.machines.items():
-            drift = random.gauss(0, -0.3)
-            if random.random() < 0.2:
-                drift = random.uniform(0, 1.2)
-            if random.random() < 0.15:
-                drift -= random.uniform(2.0, 5.0)
+            current_health = machine.health_score
+            current_status = machine.status
+            
+            # ---- Apply realistic state transitions ----
+            if current_status == MachineStatus.NORMAL:
+                # NORMAL → NORMAL (60%) | WARNING (40%)
+                roll = random.random()
+                if roll < 0.60:
+                    # Stay NORMAL: small random drift
+                    drift = random.uniform(-4.0, 3.0)
+                else:
+                    # Transition to WARNING: significant drop
+                    drift = random.uniform(-25.0, -10.0)
+                    
+            elif current_status == MachineStatus.WARNING:
+                # WARNING → NORMAL (25%) | WARNING (45%) | CRITICAL (30%)
+                roll = random.random()
+                if roll < 0.25:
+                    # Recovered to NORMAL: big improvement
+                    drift = random.uniform(15.0, 35.0)
+                elif roll < 0.70:
+                    # Stay WARNING: moderate drift either direction
+                    drift = random.uniform(-12.0, 8.0)
+                else:
+                    # Transition to CRITICAL: steep drop
+                    drift = random.uniform(-30.0, -15.0)
+                    
+            else:  # CRITICAL
+                # CRITICAL → WARNING (40%) | NORMAL (after maintenance, 30%) | CRITICAL (30%)
+                roll = random.random()
+                if roll < 0.40:
+                    # Improved to WARNING: moderate improvement
+                    drift = random.uniform(15.0, 30.0)
+                elif roll < 0.70:
+                    # Full recovery to NORMAL (maintenance completed)
+                    drift = random.uniform(35.0, 55.0)
+                else:
+                    # Stay CRITICAL: continue degrading
+                    drift = random.uniform(-15.0, -3.0)
 
-            new_health = machine.health_score + drift
-            machine.health_score = max(0, min(100, round(new_health, 1)))
+            new_health = current_health + drift
+            new_health = max(5, min(100, round(new_health, 1)))
+            
+            machine.health_score = new_health
+            
+            # ---- Recalculate failure probability based on new health ----
+            base_failure = (100 - machine.health_score) / 100.0
+            jitter = random.uniform(0.85, 1.15)
             machine.failure_probability = round(
-                max(0.01, min(0.95, (100 - machine.health_score) / 100 * random.uniform(0.45, 0.95))), 3
+                max(0.01, min(0.95, base_failure * jitter * 0.85)), 3
             )
 
-            if machine.health_score < 40:
-                machine.status = MachineStatus.CRITICAL
-            elif machine.health_score < 70:
-                machine.status = MachineStatus.WARNING
-            else:
-                machine.status = MachineStatus.NORMAL
-
-            alert = data_store.alert_service.auto_create_from_machine_status(machine)
-            data_store.work_order_service.auto_create_from_machine_status(machine, alert)
-
-            machine.operating_hours += random.uniform(0.5, 1.5)
+            # ---- Update operating hours ----
+            machine.operating_hours += random.uniform(0.8, 2.0)
+            
+            # ---- Schedule next maintenance for healthy machines ----
             if machine.health_score >= 85 and random.random() < 0.3:
                 machine.next_maintenance_date = datetime.now() + timedelta(days=random.randint(7, 30))
-            if machine.health_score < 70 and random.random() < 0.35:
-                data_store.alert_service.create_alert(
-                    machine_id=machine.machine_id,
-                    severity=AlertSeverity.CRITICAL if machine.health_score < 40 else AlertSeverity.WARNING,
-                    reason=f"{machine.machine_type.value} anomaly detected",
-                    recommended_action="Inspect sensors and schedule preventive maintenance"
-                )
+            elif machine.health_score < 40 and random.random() < 0.4:
+                # Critical machines get urgent maintenance scheduled
+                machine.next_maintenance_date = datetime.now() + timedelta(hours=random.randint(2, 12))
 
-            if machine.health_score >= 85:
-                for alert in data_store.alert_service.get_alerts_by_machine(machine.machine_id):
-                    if alert.status == "Open" and random.random() < 0.2:
-                        data_store.alert_service.resolve_alert(alert.alert_id)
+            # ---- Synchronize all derived data (alerts, work orders, logs) ----
+            sync_engine.synchronize_machine(machine)
 
+            # ---- Track prediction history ----
             data_store.prediction_history[machine.machine_id] = data_store.prediction_history.get(machine.machine_id, []) + [{
                 "timestamp": datetime.now().isoformat(),
                 "health_score": machine.health_score,
@@ -430,7 +468,12 @@ class EnterpriseSimulator:
             }]
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get overall simulation statistics, computed from the single source of truth."""
+        """Get overall simulation statistics from the single source of truth: machine.status.
+        
+        All counts (warning_count, critical_count, healthy_count) are computed
+        from machine.status directly, NOT from alert counts.
+        open_alerts is computed separately for informational purposes.
+        """
         from services import get_data_store
         data_store = get_data_store()
         
@@ -444,6 +487,7 @@ class EnterpriseSimulator:
         total_health = 0
         critical_count = 0
         warning_count = 0
+        healthy_count = 0
         
         for m in all_machines:
             status_counts[m.status.value] = status_counts.get(m.status.value, 0) + 1
@@ -454,21 +498,21 @@ class EnterpriseSimulator:
                 critical_count += 1
             elif m.status == MachineStatus.WARNING:
                 warning_count += 1
+            elif m.status == MachineStatus.NORMAL:
+                healthy_count += 1
         
-        # Compute alert statistics from the single source of truth: data_store.alert_service
+        # Open alerts count (informational, NOT used for machine status counts)
         all_alerts = data_store.alert_service.get_all_alerts()
         open_alerts = [a for a in all_alerts if a.status == "Open"]
-        critical_alerts = len([a for a in open_alerts if a.severity == AlertSeverity.CRITICAL])
-        warning_alerts = len([a for a in open_alerts if a.severity == AlertSeverity.WARNING])
         
         return {
             "total_factories": len(self.factories),
             "total_categories": len(self.factories),
             "total_machines": len(all_machines),
             "average_health": round(total_health / len(all_machines), 1) if all_machines else 0,
-            "critical_count": critical_alerts,
-            "warning_count": warning_alerts,
-            "healthy_count": status_counts.get("NORMAL", 0),
+            "critical_count": critical_count,
+            "warning_count": warning_count,
+            "healthy_count": healthy_count,
             "open_alerts": len(open_alerts),
             "status_distribution": status_counts,
             "type_distribution": type_counts,

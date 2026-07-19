@@ -1,3 +1,4 @@
+
 machine_id,timestamp,vibration,temperature,pressure,noise_level
 M3,2026-03-25T10:34:57.142082,1.23,59.21,116.9,78.07
 M3,2026-03-25T10:35:57.142082,1.94,70.36,112.46,83.37

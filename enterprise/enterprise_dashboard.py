@@ -63,6 +63,23 @@ st.markdown("""
     h3[style*="margin:6px 0 10px 0"] {
         color: #FFFFFF !important;
     }
+    .machine-link-btn {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #4da6ff !important;
+        background: transparent;
+        border: 1px solid #4da6ff;
+        cursor: pointer;
+        text-decoration: none;
+        transition: all 0.2s;
+    }
+    .machine-link-btn:hover {
+        background: #4da6ff;
+        color: #ffffff !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -84,6 +101,13 @@ MACHINE_TYPE_COLORS = {
     "Generator": "#f39c12",
     "Car Engine": "#9b59b6"
 }
+
+# ==================== NAVIGATION HELPER ====================
+
+def navigate_to_machine(machine_id: str):
+    """Navigate to a machine's detail page."""
+    st.session_state.page = "machines"
+    st.session_state.selected_machine = machine_id
 
 # ==================== SESSION STATE INIT ====================
 
@@ -167,7 +191,13 @@ def render_sidebar():
         # Simulation Controls
         st.markdown("### 🎮 Simulation Controls")
         if st.button("🔄 Refresh Data", use_container_width=True):
+            from services import get_sync_engine
             simulator.simulate_health_degradation()
+            # Validate and repair any inconsistencies after simulation
+            sync_engine = get_sync_engine()
+            validation = sync_engine.validate_consistency()
+            if not validation["consistent"]:
+                sync_engine.auto_repair()
             st.session_state.data_refreshed = True
             st.rerun()
         
@@ -193,57 +223,25 @@ def render_sidebar():
 # ==================== RANDOM EVENT GENERATION ====================
 
 def _generate_random_events():
-    """Generate random simulation events."""
-    all_machines = simulator.get_all_machines()
+    """Generate random simulation events.
     
-    # Pick random machines to degrade or generate alerts
-    for _ in range(random.randint(2, 5)):
-        machine = random.choice(all_machines)
-        severity = random.choices(
-            [AlertSeverity.CRITICAL, AlertSeverity.WARNING, AlertSeverity.INFO],
-            weights=[0.3, 0.5, 0.2]
-        )[0]
-        
-        reasons = [
-            "Vibration threshold exceeded",
-            "Temperature spike detected",
-            "Pressure anomaly detected",
-            "Abnormal noise pattern",
-            "Power consumption spike",
-            "Coolant system warning",
-            "Bearing wear detected",
-            "Lubrication system fault"
-        ]
-        
-        data_store.alert_service.create_alert(
-            machine_id=machine.machine_id,
-            severity=severity,
-            reason=random.choice(reasons),
-            recommended_action="Immediate inspection required" if severity == AlertSeverity.CRITICAL
-            else "Schedule maintenance within 24 hours"
-        )
+    Uses the simulator's health degradation + full synchronization engine
+    to ensure all derived data (alerts, work orders, maintenance logs)
+    remains consistent with machine health.
+    """
+    from services import get_sync_engine
     
-    # Create some work orders
-    for _ in range(random.randint(1, 3)):
-        machine = random.choice(all_machines)
-        wo = data_store.work_order_service.create_work_order(
-            machine_id=machine.machine_id,
-            title=f"Scheduled maintenance for {machine.name}",
-            description="Routine preventive maintenance check",
-            priority=random.choice(["Low", "Medium", "High"]),
-            estimated_hours=random.uniform(2, 8)
-        )
-        
-        # Add maintenance log
-        data_store.maintenance_log_service.add_log(
-            machine_id=machine.machine_id,
-            technician=random.choice(data_store.work_order_service.technicians),
-            maintenance_type=random.choice(list(MaintenanceType)),
-            issue="Routine inspection",
-            action_taken="Standard maintenance procedures applied",
-            cost=random.uniform(500, 5000),
-            duration_hours=random.uniform(1, 4)
-        )
+    # Step 1: Run one full simulation cycle to get realistic health changes
+    simulator.simulate_health_degradation()
+    
+    # Step 2: Force synchronize all data to ensure consistency
+    sync_engine = get_sync_engine()
+    sync_engine.synchronize_all()
+    
+    # Step 3: Validate and auto-repair any inconsistencies
+    validation = sync_engine.validate_consistency()
+    if not validation["consistent"]:
+        sync_engine.auto_repair()
 
 
 # ==================== DASHBOARD PAGE ====================
@@ -279,21 +277,18 @@ def render_dashboard():
                             border-radius: 12px; padding: 15px; margin: 8px 0;
                             border-left: 4px solid {status_color};'>
                     <h3 style='margin:0;'>{machine.machine_id}</h3>
-                    <p style='margin:2px 0; color:#aaa;'>{machine.name}</p>
-                    <p style='margin:2px 0; color:#ddd;'>{machine.machine_category} | {machine.manufacturer}</p>
-                    <p style='margin:2px 0; font-size:0.85rem; color:#888;'>
-                        Health Score: <strong>{machine.health_score:.1f}%</strong><br>
-                        Status: <strong>{machine.status.value}</strong>
+                    <p style='margin:2px 0; color: #aaa;'>{machine.name}</p>
+                    <p style='margin:2px 0; color: #ddd;'>{machine.manufacturer}</p>
+                    <p style='margin:2px 0; font-size: 0.85rem; color: #888;'>
+                        Health: {machine.health_score:.1f}% | Status: {machine.status.value}
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
-                if st.button("View Details", key=f"dashboard_search_detail_{machine.machine_id}", use_container_width=True):
-                    st.session_state.selected_machine = machine.machine_id
-                    st.session_state.page = "machines"
+                if st.button("View Details", key=f"search_view_{machine.machine_id}", use_container_width=True):
+                    navigate_to_machine(machine.machine_id)
                     st.rerun()
-        st.markdown("---")
 
-    # === KPI CARDS ===
+    # === KPI METRICS ===
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
@@ -438,29 +433,21 @@ def render_dashboard():
     
     if open_alerts:
         st.caption(f"Showing latest {min(10, len(open_alerts))} alerts")
-        alert_data = []
         for a in recent_alerts:
             machine = simulator.get_machine(a.machine_id)
-            alert_data.append({
-                "Machine": a.machine_id,
-                "Name": machine.name if machine else "",
-                "Severity": a.severity.value,
-                "Reason": a.reason,
-                "Time": a.timestamp.strftime("%H:%M:%S"),
-                "Status": a.status
-            })
-        df = pd.DataFrame(alert_data)
-        
-        # Color-code severity
-        def color_severity(val):
-            colors = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}
-            return f"background-color: {colors.get(val, '#888')}; color: white;"
-        
-        st.dataframe(
-            df.style.applymap(color_severity, subset=["Severity"]),
-            use_container_width=True,
-            hide_index=True
-        )
+            severity_color = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}.get(a.severity.value, "#888")
+            col_a, col_b, col_c, col_d = st.columns([1.5, 1.5, 3, 1.5])
+            with col_a:
+                st.markdown(f"<span style='color:{severity_color};font-weight:bold;'>{a.severity.value}</span>", unsafe_allow_html=True)
+            with col_b:
+                machine_name = machine.name if machine else "N/A"
+                st.markdown(f"<span style='color:#ccc;'>{machine_name}</span>", unsafe_allow_html=True)
+            with col_c:
+                st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{a.reason[:60]}</span>", unsafe_allow_html=True)
+            with col_d:
+                if st.button(f"🔍 {a.machine_id}", key=f"dash_alert_{a.alert_id}", use_container_width=True):
+                    navigate_to_machine(a.machine_id)
+                    st.rerun()
     else:
         st.info("✅ No open alerts. All systems normal.")
     
@@ -468,30 +455,26 @@ def render_dashboard():
     st.markdown("---")
     st.subheader("⚙️ All Machines Health Status")
     
-    machine_rows = []
     for m in sorted(all_machines, key=lambda x: x.health_score):
-        machine_rows.append({
-            "ID": m.machine_id,
-            "Name": m.name,
-            "Type": m.machine_type.value,
-            "Category": m.machine_category,
-            "Manufacturer": m.manufacturer,
-            "Model": m.model_number,
-            "Health": f"{m.health_score}%",
-            "Status": m.status.value,
-            "Failure Prob": f"{m.failure_probability*100:.1f}%"
-        })
-    
-    df = pd.DataFrame(machine_rows)
-    
-    def color_status(val):
-        return f"background-color: {STATUS_COLORS.get(val, '#888')}; color: white;"
-    
-    st.dataframe(
-        df.style.applymap(color_status, subset=["Status"]),
-        use_container_width=True,
-        hide_index=True
-    )
+        status_color = STATUS_COLORS.get(m.status.value, "#888")
+        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
+        with col_a:
+            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
+        with col_b:
+            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
+        with col_c:
+            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
+        with col_d:
+            st.markdown(f"<span style='color:#ddd;'>{m.health_score}%</span>", unsafe_allow_html=True)
+        with col_e:
+            st.markdown(f"<span style='color:#ffaa00;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
+        with col_f:
+            badge_color = STATUS_COLORS.get(m.status.value, "#888")
+            st.markdown(f"<span style='background:{badge_color};color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>{m.status.value}</span>", unsafe_allow_html=True)
+        with col_g:
+            if st.button("View", key=f"dash_machine_{m.machine_id}", use_container_width=True):
+                navigate_to_machine(m.machine_id)
+                st.rerun()
 
 
 # ==================== MACHINES PAGE ====================
@@ -880,19 +863,23 @@ def render_prediction_tab(machine: MachineInfo):
 
 
 def render_work_orders_tab(machine: MachineInfo):
-    """Render work orders for a machine."""
-    st.markdown("### 📋 Work Orders")
+    """Render active work orders for a machine (Open / In Progress only)."""
+    st.markdown("### 📋 Active Work Orders")
     
     col1, col2 = st.columns([3, 1])
     
     with col1:
         work_orders = data_store.work_order_service.get_work_orders_by_machine(machine.machine_id)
+        active_work_orders = [wo for wo in work_orders if wo.status.value in ("Open", "In Progress")]
         
-        if not work_orders:
-            st.info("No work orders for this machine.")
+        if not active_work_orders:
+            if machine.status == MachineStatus.NORMAL:
+                st.success("✅ No active work orders. Machine is normal.")
+            else:
+                st.info("No active work orders for this machine.")
         else:
             wo_data = []
-            for wo in work_orders:
+            for wo in active_work_orders:
                 wo_data.append({
                     "ID": wo.work_order_id,
                     "Title": wo.title,
@@ -917,14 +904,12 @@ def render_work_orders_tab(machine: MachineInfo):
             st.rerun()
     
     st.markdown("---")
-    st.markdown("### 📊 Work Order Summary")
+    st.markdown("### 📊 Active Work Order Summary")
     
     summary = data_store.work_order_service.get_work_order_summary()
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
     col1.metric("Open", summary.get("Open", 0))
     col2.metric("In Progress", summary.get("In Progress", 0))
-    col3.metric("Completed", summary.get("Completed", 0))
-    col4.metric("Cancelled", summary.get("Cancelled", 0))
 
 
 def render_maintenance_logs_tab(machine: MachineInfo):
@@ -1026,14 +1011,36 @@ def render_ai_chat_tab(machine: MachineInfo):
 
 
 def render_machine_alerts_tab(machine: MachineInfo):
-    """Render alerts for a machine."""
-    st.markdown("### Alerts")
+    """Render alerts for a machine.
+    
+    Shows "Alert History" section with all alerts (historical + active).
+    Active alerts are highlighted.
+    """
     alerts = data_store.alert_service.get_alerts_by_machine(machine.machine_id)
+    active_alerts = [a for a in alerts if a.status == "Open"]
 
     if not alerts:
         st.info("No alerts for this machine.")
         return
 
+    # Show active alerts first if any
+    if active_alerts:
+        st.markdown("### 🚨 Active Alerts")
+        for alert in sorted(active_alerts, key=lambda a: a.timestamp, reverse=True):
+            severity_color = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}.get(alert.severity.value, "#888")
+            st.markdown(f"""
+            <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                        border-radius: 8px; padding: 10px; margin: 5px 0;
+                        border-left: 4px solid {severity_color};'>
+                <span style='color:{severity_color};font-weight:bold;'>{alert.severity.value}</span>
+                <span style='color:#aaa;margin-left:10px;'>{alert.timestamp.strftime('%Y-%m-%d %H:%M')}</span>
+                <p style='margin:5px 0;color:#ccc;'>{alert.reason}</p>
+                <p style='margin:2px 0;color:#888;font-size:0.85rem;'>{alert.recommended_action}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Show historical alerts section
+    st.markdown("### 📜 Alert History")
     alert_rows = []
     for alert in sorted(alerts, key=lambda a: a.timestamp, reverse=True):
         alert_rows.append({
@@ -1246,26 +1253,16 @@ def render_analytics():
     col1, col2 = st.columns(2)
     with col1:
         high_risk = sorted(all_machines, key=lambda m: (m.failure_probability, 100 - m.health_score), reverse=True)[:10]
-        high_risk_df = pd.DataFrame([
-            {
-                "Machine": f"{m.machine_id} - {m.name}",
-                "Category": m.machine_category,
-                "Failure Probability": round(m.failure_probability * 100, 1),
-                "Health": round(m.health_score, 1),
-            }
-            for m in high_risk
-        ])
-        fig = px.bar(
-            high_risk_df,
-            x="Failure Probability",
-            y="Machine",
-            color="Category",
-            title="Top 10 High-Risk Machines",
-            orientation="h",
-            color_discrete_map=MACHINE_TYPE_COLORS,
-        )
-        fig.update_layout(height=430, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', yaxis={'categoryorder': 'total ascending'})
-        st.plotly_chart(fig, use_container_width=True)
+        for m in high_risk:
+            col_m1, col_m2, col_m3 = st.columns([2, 2, 1])
+            with col_m1:
+                st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span> - <span style='color:#666;'>{m.name}</span>", unsafe_allow_html=True)
+            with col_m2:
+                st.markdown(f"<span style='color:#666;'>{m.machine_category} | Health: {m.health_score:.1f}% | Failure: {m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
+            with col_m3:
+                if st.button("View", key=f"analytics_view_{m.machine_id}", use_container_width=True):
+                    navigate_to_machine(m.machine_id)
+                    st.rerun()
 
     with col2:
         forecast_buckets = {"Overdue": 0, "Next 7 Days": 0, "8-30 Days": 0, "31+ Days": 0, "Not Scheduled": 0}
@@ -1366,120 +1363,131 @@ def render_analytics():
         for recommendation in recommendations:
             st.info(recommendation)
 
+    # === HIGH RISK MACHINES DETAIL ===
+    st.markdown("---")
+    st.subheader("Top 10 High-Risk Machines")
+    high_risk = sorted(all_machines, key=lambda m: (m.failure_probability, 100 - m.health_score), reverse=True)[:10]
+    for m in high_risk:
+        col_a, col_b, col_c = st.columns([1.5, 4, 1])
+        with col_a:
+            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
+        with col_b:
+            st.markdown(f"<span style='color:#666;'>{m.name} | {m.machine_category} | Health: {m.health_score:.1f}% | Failure Prob: {m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
+        with col_c:
+            if st.button("View", key=f"analytics_risk_view_{m.machine_id}", use_container_width=True):
+                navigate_to_machine(m.machine_id)
+                st.rerun()
+
 
 # ==================== ALERTS PAGE ====================
 
 def render_alerts():
-    """Render alert center."""
+    """Render alert center - shows ONLY active (Open) alerts."""
     st.markdown("<h1 class='main-header'>🚨 Alert Center</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Showing only active alerts. Resolved alerts are moved to history.</p>", unsafe_allow_html=True)
     st.markdown("---")
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Summary: only active alerts (Open) with Warning and Critical breakdown
+    col1, col2, col3 = st.columns(3)
     summary = data_store.alert_service.get_alert_summary()
-    col1.metric("Total Alerts", len(data_store.alert_service.get_all_alerts()))
-    col2.metric("Open", summary.get("Open", 0))
-    col3.metric("Critical", summary.get("CRITICAL", 0))
-    col4.metric("Warning", summary.get("WARNING", 0))
+    open_count = summary.get("open", 0)
+    critical_count = summary.get("critical", 0)
+    warning_count = summary.get("warning", 0)
+    
+    col1.metric("Active Alerts", open_count)
+    col2.metric("Warning", warning_count)
+    col3.metric("Critical", critical_count)
     
     st.markdown("---")
     
-    # Filter
+    # Filter by severity - only for active alerts
     severity_filter = st.selectbox("Filter by Severity", ["All", "CRITICAL", "WARNING", "INFO"])
     
-    alerts = data_store.alert_service.get_all_alerts()
+    # Get ONLY open alerts (active alerts only)
+    alerts = data_store.alert_service.get_open_alerts()
     if severity_filter != "All":
         alerts = [a for a in alerts if a.severity.value == severity_filter]
     
-    # Sort by timestamp descending
+    # Sort by timestamp descending (newest first)
     alerts.sort(key=lambda a: a.timestamp, reverse=True)
     
     if not alerts:
-        st.info("No alerts found.")
+        st.success("✅ No active alerts. All systems normal.")
     else:
-        alert_data = []
+        st.caption(f"Showing {len(alerts)} active alert(s)")
         for a in alerts:
             machine = simulator.get_machine(a.machine_id)
-            alert_data.append({
-                "ID": a.alert_id[:20],
-                "Machine": a.machine_id,
-                "Name": machine.name if machine else "N/A",
-                "Severity": a.severity.value,
-                "Reason": a.reason[:60] + "..." if len(a.reason) > 60 else a.reason,
-                "Time": a.timestamp.strftime("%Y-%m-%d %H:%M"),
-                "Status": a.status,
-                "Action": a.recommended_action[:50] + "..." if len(a.recommended_action) > 50 else a.recommended_action
-            })
-        
-        df = pd.DataFrame(alert_data)
-        
-        def color_severity(val):
-            colors = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}
-            return f"background-color: {colors.get(val, '#888')}; color: white;"
-        
-        def color_status(val):
-            return f"background-color: {'#44CC44' if val == 'Resolved' else '#FFAA00' if val == 'Acknowledged' else '#FF4444'}; color: white;"
-        
-        st.dataframe(
-            df.style.applymap(color_severity, subset=["Severity"])
-              .applymap(color_status, subset=["Status"]),
-            use_container_width=True,
-            hide_index=True
-        )
+            severity_color = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}.get(a.severity.value, "#888")
+            col_a, col_b, col_c, col_d, col_e, col_f = st.columns([1.2, 1.2, 1.5, 2.5, 1, 1])
+            with col_a:
+                st.markdown(f"<span style='color:#aaa;font-size:0.8rem;'>{a.alert_id[:12]}</span>", unsafe_allow_html=True)
+            with col_b:
+                st.markdown(f"<span style='color:{severity_color};font-weight:bold;'>{a.severity.value}</span>", unsafe_allow_html=True)
+            with col_c:
+                machine_name = machine.name if machine else "N/A"
+                st.markdown(f"<span style='color:#ccc;'>{machine_name}</span>", unsafe_allow_html=True)
+            with col_d:
+                st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{a.reason[:60]}</span>", unsafe_allow_html=True)
+            with col_e:
+                st.markdown(f"<span style='color:#888;font-size:0.8rem;'>{a.timestamp.strftime('%Y-%m-%d %H:%M')}</span>", unsafe_allow_html=True)
+            with col_f:
+                if st.button(f"🔍 {a.machine_id}", key=f"alert_{a.alert_id}", use_container_width=True):
+                    navigate_to_machine(a.machine_id)
+                    st.rerun()
 
 
 # ==================== WORK ORDERS PAGE ====================
 
 def render_work_orders():
-    """Render work orders page."""
+    """Render work orders page - shows ONLY Open and In Progress work orders.
+    Completed/Cancelled work orders are moved to Maintenance Logs."""
     st.markdown("<h1 class='main-header'>📋 Work Orders</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Showing only active work orders (Open / In Progress). Completed work orders are in Maintenance Logs.</p>", unsafe_allow_html=True)
     st.markdown("---")
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Show only Open and In Progress counts
+    col1, col2 = st.columns(2)
     summary = data_store.work_order_service.get_work_order_summary()
     col1.metric("Open", summary.get("Open", 0))
     col2.metric("In Progress", summary.get("In Progress", 0))
-    col3.metric("Completed", summary.get("Completed", 0))
-    col4.metric("Total", len(data_store.work_order_service.get_all_work_orders()))
     
     st.markdown("---")
     
-    # Filter
-    status_filter = st.selectbox("Filter by Status", ["All", "Open", "In Progress", "Completed", "Cancelled"])
+    # Filter by status - only active statuses
+    status_filter = st.selectbox("Filter by Status", ["All", "Open", "In Progress"])
     
-    work_orders = data_store.work_order_service.get_all_work_orders()
+    # Get only open and in-progress work orders (active only)
+    all_work_orders = data_store.work_order_service.get_all_work_orders()
+    work_orders = [wo for wo in all_work_orders if wo.status.value in ("Open", "In Progress")]
     if status_filter != "All":
         work_orders = [wo for wo in work_orders if wo.status.value == status_filter]
     
     work_orders.sort(key=lambda wo: wo.created_date, reverse=True)
     
     if not work_orders:
-        st.info("No work orders found.")
+        st.success("✅ No active work orders. All machines are operating normally.")
     else:
-        wo_data = []
+        st.caption(f"Showing {len(work_orders)} active work order(s)")
         for wo in work_orders:
-            machine = simulator.get_machine(wo.machine_id)
-            wo_data.append({
-                "ID": wo.work_order_id,
-                "Machine": wo.machine_id,
-                "Title": wo.title[:50] + "..." if len(wo.title) > 50 else wo.title,
-                "Status": wo.status.value,
-                "Priority": wo.priority,
-                "Technician": wo.assigned_technician,
-                "Scheduled": wo.scheduled_date.strftime("%Y-%m-%d") if wo.scheduled_date else "N/A",
-                "Created": wo.created_date.strftime("%Y-%m-%d")
-            })
-        
-        df = pd.DataFrame(wo_data)
-        
-        def color_status(val):
-            colors = {"Open": "#FF4444", "In Progress": "#FFAA00", "Completed": "#44CC44", "Cancelled": "#888"}
-            return f"background-color: {colors.get(val, '#888')}; color: white;"
-        
-        st.dataframe(
-            df.style.applymap(color_status, subset=["Status"]),
-            use_container_width=True,
-            hide_index=True
-        )
+            col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 2, 1.2, 1, 0.8, 1, 0.8])
+            with col_a:
+                st.markdown(f"<span style='color:#aaa;font-size:0.8rem;'>{wo.work_order_id[:12]}</span>", unsafe_allow_html=True)
+            with col_b:
+                st.markdown(f"<span style='color:#ccc;'>{wo.title[:40]}</span>", unsafe_allow_html=True)
+            with col_c:
+                st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{wo.machine_id}</span>", unsafe_allow_html=True)
+            with col_d:
+                status_colors = {"Open": "#FF4444", "In Progress": "#FFAA00", "Completed": "#44CC44", "Cancelled": "#888"}
+                wo_color = status_colors.get(wo.status.value, "#888")
+                st.markdown(f"<span style='color:{wo_color};'>{wo.status.value}</span>", unsafe_allow_html=True)
+            with col_e:
+                st.markdown(f"<span style='color:#ddd;'>{wo.priority}</span>", unsafe_allow_html=True)
+            with col_f:
+                st.markdown(f"<span style='color:#888;font-size:0.8rem;'>{wo.assigned_technician}</span>", unsafe_allow_html=True)
+            with col_g:
+                if st.button("🔍", key=f"wo_view_{wo.work_order_id}", use_container_width=True):
+                    navigate_to_machine(wo.machine_id)
+                    st.rerun()
 
 
 # ==================== REPORTS PAGE ====================
@@ -1524,13 +1532,17 @@ def _attention_rows() -> List[Dict[str, Any]]:
 
 
 def _daily_report_tables(data: Dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # Count open alerts from the data's open_alerts list
+    open_alerts_list = data.get("open_alerts", [])
+    open_alerts_count = len(open_alerts_list) if isinstance(open_alerts_list, list) else data.get("new_alerts", 0)
+    
     fleet_summary = pd.DataFrame([{
         "Total Machines": data.get("total_machines", 0),
         "Healthy": data.get("normal_count", 0),
         "Warning": data.get("warning_count", 0),
         "Critical": data.get("critical_count", 0),
         "Average Health": f"{data.get('average_health', 0)}%",
-        "Open Alerts": data.get("new_alerts", 0),
+        "Open Alerts": open_alerts_count,
         "New Work Orders": data.get("new_work_orders", 0)
     }])
     attention = pd.DataFrame(_attention_rows())
@@ -1718,7 +1730,7 @@ def _download_report_buttons(title: str, report_date: str, fleet_summary: pd.Dat
     with col2:
         st.download_button(
             "Download Excel",
-            data=_excel_bytes(title, fleet_summary, attention, summary),
+            data=_excel_bytes(title, report_date, fleet_summary, attention, summary),
             file_name=f"{safe_name}.xls",
             mime="application/vnd.ms-excel",
             use_container_width=True,
@@ -1727,7 +1739,7 @@ def _download_report_buttons(title: str, report_date: str, fleet_summary: pd.Dat
     with col3:
         st.download_button(
             "Download CSV",
-            data=_csv_bytes(title, fleet_summary, attention, summary),
+            data=_csv_bytes(title, report_date, fleet_summary, attention, summary),
             file_name=f"{safe_name}.csv",
             mime="text/csv",
             use_container_width=True,
@@ -1881,7 +1893,21 @@ def _render_daily_report(report: Any, key_context: str = ""):
     if attention.empty:
         st.info("No warning or critical machines.")
     else:
-        st.dataframe(attention, use_container_width=True, hide_index=True)
+        for _, row in attention.iterrows():
+            col_a, col_b, col_c, col_d, col_e = st.columns([1.2, 2, 1.5, 1.5, 0.8])
+            with col_a:
+                st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{row['Machine ID']}</span>", unsafe_allow_html=True)
+            with col_b:
+                st.markdown(f"<span style='color:#ccc;'>{row['Machine Name']}</span>", unsafe_allow_html=True)
+            with col_c:
+                st.markdown(f"<span style='color:#888;'>{row['Category']} | {row['Health Score']}</span>", unsafe_allow_html=True)
+            with col_d:
+                status_color = STATUS_COLORS.get(row['Status'], "#888")
+                st.markdown(f"<span style='color:{status_color};font-weight:bold;'>{row['Status']}</span>", unsafe_allow_html=True)
+            with col_e:
+                if st.button("View", key=f"report_attention_{key_context}_{row['Machine ID']}", use_container_width=True):
+                    navigate_to_machine(row['Machine ID'])
+                    st.rerun()
     st.markdown("#### AI Summary")
     st.write(summary)
     _download_report_buttons(parts["title"], report_date, fleet_summary, attention, summary, key_context)
@@ -2111,28 +2137,26 @@ def render_maintenance_logs():
         if not filtered_logs:
             st.info("No maintenance logs found.")
         else:
-            log_data = []
             for log in filtered_logs:
                 machine = simulator.get_machine(log.machine_id)
-                log_data.append({
-                    "Log ID": log.log_id,
-                    "Date": log.maintenance_date.strftime("%Y-%m-%d %H:%M"),
-                    "Machine": log.machine_id,
-                    "Name": log.machine_name or (machine.name if machine else "N/A"),
-                    "Category": log.category or (machine.machine_category if machine else "N/A"),
-                    "Type": log.maintenance_type.value,
-                    "Technician": log.technician,
-                    "Issue": log.issue[:40] + "..." if len(log.issue) > 40 else log.issue,
-                    "Cost": f"₹{log.cost:,.2f}",
-                    "Duration": f"{log.duration_hours}h",
-                    "Downtime": f"{getattr(log, 'downtime_hours', log.duration_hours)}h",
-                    "Before Health": getattr(log, "before_health", 0),
-                    "After Health": getattr(log, "after_health", 0),
-                    "Status": getattr(log, "status", "Completed")
-                })
-            
-            df = pd.DataFrame(log_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+                col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([0.8, 1, 1.2, 1.2, 0.8, 1, 0.8])
+                with col_a:
+                    st.markdown(f"<span style='color:#888;font-size:0.8rem;'>{log.maintenance_date.strftime('%m-%d %H:%M')}</span>", unsafe_allow_html=True)
+                with col_b:
+                    st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{log.machine_id}</span>", unsafe_allow_html=True)
+                with col_c:
+                    name = log.machine_name or (machine.name if machine else "N/A")
+                    st.markdown(f"<span style='color:#ccc;font-size:0.85rem;'>{name}</span>", unsafe_allow_html=True)
+                with col_d:
+                    st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{log.maintenance_type.value}</span>", unsafe_allow_html=True)
+                with col_e:
+                    st.markdown(f"<span style='color:#ddd;'>₹{log.cost:,.0f}</span>", unsafe_allow_html=True)
+                with col_f:
+                    st.markdown(f"<span style='color:#888;font-size:0.85rem;'>{log.technician}</span>", unsafe_allow_html=True)
+                with col_g:
+                    if st.button("🔍", key=f"log_view_{log.log_id}", use_container_width=True):
+                        navigate_to_machine(log.machine_id)
+                        st.rerun()
     
     with col2:
         all_logs = data_store.maintenance_log_service.get_all_logs()
@@ -2233,6 +2257,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
