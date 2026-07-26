@@ -5,9 +5,17 @@ Generates daily, weekly, monthly, machine, category, maintenance, and prediction
 Reuses analytics engine and existing data.
 """
 
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta, time
 from dataclasses import asdict
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_DIR.parent
+for path in (str(PACKAGE_DIR), str(PROJECT_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from models import (
     MachineInfo, MachineStatus, MachineType, Report,

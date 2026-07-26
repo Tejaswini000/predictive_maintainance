@@ -135,6 +135,12 @@ class MachineInfo:
     last_maintenance_date: Optional[datetime] = None
     next_maintenance_date: Optional[datetime] = None
     supported_sensors: List[SensorType] = field(default_factory=list)
+    # ML Prediction metadata (set dynamically by ML predictor)
+    ml_prediction: Optional[Dict] = None
+    condition: str = "Normal"
+    cause: str = ""
+    maintenance_recommendation: str = "Within 30 days"
+    recent_failure_causes: List[str] = field(default_factory=list)
     # Extended fields from Excel master data
     serial_number: str = ""
     color: str = ""
@@ -170,6 +176,9 @@ class MachineInfo:
             "last_maintenance_date": self.last_maintenance_date.isoformat() if self.last_maintenance_date else None,
             "next_maintenance_date": self.next_maintenance_date.isoformat() if self.next_maintenance_date else None,
             "supported_sensors": [s.value for s in self.supported_sensors],
+            "condition": self.condition,
+            "cause": self.cause,
+            "maintenance_recommendation": self.maintenance_recommendation,
             "serial_number": self.serial_number,
             "color": self.color,
             "purchase_date": self.purchase_date.isoformat() if self.purchase_date else None,

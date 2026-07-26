@@ -8,8 +8,17 @@ maintenance logs, and sensor history.
 import sqlite3
 import json
 import os
+import sys
+import random
+from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, date
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_DIR.parent
+for path in (str(PACKAGE_DIR), str(PROJECT_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from models import (
     MachineInfo, MachineStatus, MachineType, Alert, AlertSeverity,
@@ -64,8 +73,34 @@ class DatabaseManager:
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
+    def _ensure_machine_columns(self, conn: sqlite3.Connection):
+        """Add newer machine columns to older SQLite databases without breaking existing data."""
+        cursor = conn.execute("PRAGMA table_info(Machines)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        column_definitions = {
+            "condition": "TEXT DEFAULT 'Normal'",
+            "cause": "TEXT DEFAULT ''",
+            "maintenance_recommendation": "TEXT DEFAULT 'Within 30 days'",
+            "serial_number": "TEXT DEFAULT ''",
+            "color": "TEXT DEFAULT ''",
+            "purchase_date": "TEXT",
+            "warranty_expiry": "TEXT",
+            "supplier": "TEXT DEFAULT ''",
+            "purchase_cost": "REAL DEFAULT 0.0",
+            "location": "TEXT DEFAULT ''",
+            "department": "TEXT DEFAULT ''",
+            "assigned_technician": "TEXT DEFAULT ''",
+            "capacity": "TEXT DEFAULT ''",
+            "power_rating": "TEXT DEFAULT ''",
+        }
+
+        for column_name, definition in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(f"ALTER TABLE Machines ADD COLUMN {column_name} {definition}")
+
     def _init_tables(self):
-        """Create all tables if they don't exist."""
+        """Create all tables if they don't exist and migrate older schemas."""
         conn = self._get_connection()
         try:
             conn.executescript("""
@@ -85,6 +120,9 @@ class DatabaseManager:
                     last_maintenance_date TEXT,
                     next_maintenance_date TEXT,
                     supported_sensors TEXT DEFAULT '[]',
+                    condition TEXT DEFAULT 'Normal',
+                    cause TEXT DEFAULT '',
+                    maintenance_recommendation TEXT DEFAULT 'Within 30 days',
                     serial_number TEXT DEFAULT '',
                     color TEXT DEFAULT '',
                     purchase_date TEXT,
@@ -185,6 +223,7 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_sensorhistory_machine ON SensorHistory(machine_id);
                 CREATE INDEX IF NOT EXISTS idx_sensorhistory_time ON SensorHistory(timestamp);
             """)
+            self._ensure_machine_columns(conn)
             conn.commit()
         finally:
             conn.close()
@@ -217,11 +256,12 @@ class DatabaseManager:
                     manufacturer, model_number, installation_date, operating_hours,
                     status, health_score, failure_probability,
                     last_maintenance_date, next_maintenance_date, supported_sensors,
+                    condition, cause, maintenance_recommendation,
                     serial_number, color, purchase_date, warranty_expiry,
                     supplier, purchase_cost, location, department,
                     assigned_technician, capacity, power_rating)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     machine.machine_id,
                     machine.name,
@@ -238,6 +278,9 @@ class DatabaseManager:
                     _serialize_datetime(machine.last_maintenance_date),
                     _serialize_datetime(machine.next_maintenance_date),
                     json.dumps([s.value if hasattr(s, 'value') else s for s in machine.supported_sensors]),
+                    machine.condition,
+                    machine.cause,
+                    machine.maintenance_recommendation,
                     machine.serial_number,
                     machine.color,
                     _serialize_datetime(machine.purchase_date),
@@ -255,6 +298,59 @@ class DatabaseManager:
         finally:
             conn.close()
 
+    def update_machine_static_info(self, machine: MachineInfo):
+        """Refresh static Excel-sourced fields without touching live simulation state."""
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """UPDATE Machines SET
+                    name = ?,
+                    machine_type = ?,
+                    production_line = ?,
+                    factory_id = ?,
+                    manufacturer = ?,
+                    model_number = ?,
+                    installation_date = ?,
+                    supported_sensors = ?,
+                    serial_number = ?,
+                    color = ?,
+                    purchase_date = ?,
+                    warranty_expiry = ?,
+                    supplier = ?,
+                    purchase_cost = ?,
+                    location = ?,
+                    department = ?,
+                    assigned_technician = ?,
+                    capacity = ?,
+                    power_rating = ?
+                   WHERE machine_id = ?""",
+                (
+                    machine.name,
+                    machine.machine_type.value if hasattr(machine.machine_type, 'value') else machine.machine_type,
+                    machine.production_line,
+                    machine.factory_id,
+                    machine.manufacturer,
+                    machine.model_number,
+                    _serialize_datetime(machine.installation_date),
+                    json.dumps([s.value if hasattr(s, 'value') else s for s in machine.supported_sensors]),
+                    machine.serial_number,
+                    machine.color,
+                    _serialize_datetime(machine.purchase_date),
+                    _serialize_datetime(machine.warranty_expiry),
+                    machine.supplier,
+                    machine.purchase_cost,
+                    machine.location,
+                    machine.department,
+                    machine.assigned_technician,
+                    machine.capacity,
+                    machine.power_rating,
+                    machine.machine_id,
+                )
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def update_machine(self, machine: MachineInfo):
         """Update an existing machine's dynamic fields."""
         conn = self._get_connection()
@@ -266,7 +362,10 @@ class DatabaseManager:
                     health_score = ?,
                     failure_probability = ?,
                     last_maintenance_date = ?,
-                    next_maintenance_date = ?
+                    next_maintenance_date = ?,
+                    condition = ?,
+                    cause = ?,
+                    maintenance_recommendation = ?
                    WHERE machine_id = ?""",
                 (
                     machine.operating_hours,
@@ -275,6 +374,9 @@ class DatabaseManager:
                     machine.failure_probability,
                     _serialize_datetime(machine.last_maintenance_date),
                     _serialize_datetime(machine.next_maintenance_date),
+                    machine.condition,
+                    machine.cause,
+                    machine.maintenance_recommendation,
                     machine.machine_id
                 )
             )
@@ -324,6 +426,7 @@ class DatabaseManager:
             conn.close()
 
     def _row_to_machine(self, row: sqlite3.Row) -> MachineInfo:
+        columns = set(row.keys())
         supported_sensors_raw = row["supported_sensors"] if row["supported_sensors"] else "[]"
         try:
             sensor_values = json.loads(supported_sensors_raw)
@@ -364,17 +467,20 @@ class DatabaseManager:
             last_maintenance_date=_deserialize_datetime(row["last_maintenance_date"]),
             next_maintenance_date=_deserialize_datetime(row["next_maintenance_date"]),
             supported_sensors=supported_sensors,
-            serial_number=row["serial_number"] if "serial_number" in row else "",
-            color=row["color"] if "color" in row else "",
-            purchase_date=_deserialize_datetime(row["purchase_date"]) if "purchase_date" in row else None,
-            warranty_expiry=_deserialize_datetime(row["warranty_expiry"]) if "warranty_expiry" in row else None,
-            supplier=row["supplier"] if "supplier" in row else "",
-            purchase_cost=row["purchase_cost"] if "purchase_cost" in row else 0.0,
-            location=row["location"] if "location" in row else "",
-            department=row["department"] if "department" in row else "",
-            assigned_technician=row["assigned_technician"] if "assigned_technician" in row else "",
-            capacity=row["capacity"] if "capacity" in row else "",
-            power_rating=row["power_rating"] if "power_rating" in row else "",
+            condition=row["condition"] if "condition" in columns else "Normal",
+            cause=row["cause"] if "cause" in columns else "",
+            maintenance_recommendation=row["maintenance_recommendation"] if "maintenance_recommendation" in columns else "Within 30 days",
+            serial_number=row["serial_number"] if "serial_number" in columns else "",
+            color=row["color"] if "color" in columns else "",
+            purchase_date=_deserialize_datetime(row["purchase_date"]) if "purchase_date" in columns else None,
+            warranty_expiry=_deserialize_datetime(row["warranty_expiry"]) if "warranty_expiry" in columns else None,
+            supplier=row["supplier"] if "supplier" in columns else "",
+            purchase_cost=row["purchase_cost"] if "purchase_cost" in columns else 0.0,
+            location=row["location"] if "location" in columns else "",
+            department=row["department"] if "department" in columns else "",
+            assigned_technician=row["assigned_technician"] if "assigned_technician" in columns else "",
+            capacity=row["capacity"] if "capacity" in columns else "",
+            power_rating=row["power_rating"] if "power_rating" in columns else "",
         )
 
     # ==================== ALERT OPERATIONS ====================
@@ -738,6 +844,15 @@ class DatabaseManager:
         finally:
             conn.close()
 
+    def delete_alert(self, alert_id: str) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("DELETE FROM Alerts WHERE alert_id = ?", (alert_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def _row_to_work_order(self, row: sqlite3.Row) -> WorkOrder:
         status_val = row["status"]
         try:
@@ -883,6 +998,27 @@ class DatabaseManager:
         finally:
             conn.close()
 
+    def get_latest_completed_maintenance_log(self, machine_id: str) -> Optional[MaintenanceLog]:
+        """Get the most recent completed maintenance log for a machine.
+        
+        This is the SINGLE SOURCE OF TRUTH for the machine's last_maintenance_date.
+        Machine Details must derive "Last Maintenance" from this method.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """SELECT * FROM MaintenanceLogs 
+                   WHERE machine_id = ? AND status = 'Completed' 
+                   ORDER BY maintenance_date DESC LIMIT 1""",
+                (machine_id,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_maintenance_log(row)
+        finally:
+            conn.close()
+
     def get_recent_maintenance_logs(self, days: int = 30) -> List[MaintenanceLog]:
         cutoff = datetime.now()
         cutoff_str = _serialize_datetime(cutoff)
@@ -997,6 +1133,34 @@ class DatabaseManager:
             conn.close()
 
     # ==================== SEEDING ====================
+
+    def create_alert_record(self, machine_id: str, severity: Any, reason: str, 
+                           recommended_action: str = "", timestamp: Optional[datetime] = None,
+                           status: str = "Open") -> Any:
+        """Create an alert record directly in the database.
+        Used by simulation's seed_history to generate historical alerts.
+        Returns the inserted alert as an Alert object.
+        """
+        from models import Alert, AlertSeverity
+        severity_val = severity.value if hasattr(severity, 'value') else severity
+        try:
+            sev = AlertSeverity(severity_val)
+        except ValueError:
+            sev = AlertSeverity.WARNING
+        
+        alert_id = f"ALT-{machine_id}-{timestamp.strftime('%Y%m%d%H%M%S%f') if timestamp else datetime.now().strftime('%Y%m%d%H%M%S%f')}-{random.randint(100, 999)}"
+        
+        alert = Alert(
+            alert_id=alert_id,
+            machine_id=machine_id,
+            severity=sev,
+            reason=reason,
+            timestamp=timestamp or datetime.now(),
+            recommended_action=recommended_action,
+            status=status
+        )
+        self.insert_alert(alert)
+        return alert
 
     def seed_machines(self, machines: List[MachineInfo]):
         """Seed the database with machines if the Machines table is empty."""

@@ -1,0 +1,96 @@
+File size: 115739 bytes
+
+Fragment b"ric-number'>5</"
+  NOT found (good)
+
+Fragment b"ric-label'>\n<div"
+  NOT found (good)
+
+Fragment b'ric-number'
+  FOUND at byte 3360
+  Context: b'\r\r\n    }\r\r\r\n    .metric-number {\r\r\r\n        font-size: 40px;\r\r\r\n        font-wei'
+  Line ~103
+
+Null bytes: NONE (good)
+
+Number of 'metric-card' occurrences: 12
+  Card 1 at byte 1595: b'metric-card { \r\r\r\n        background: linear-gradient(135deg, #17213a, #0f172a);'
+  Card 2 at byte 2185: b"metric-card::before {\r\r\r\n        content: '';\r\r\r\n        position: absolute;\r\r\r\n"
+  Card 3 at byte 2576: b'metric-card:hover {\r\r\r\n        transform: translateY(-6px);\r\r\r\n        box-shado'
+  Card 4 at byte 2784: b'metric-card:hover::before {\r\r\r\n        opacity: 1;\r\r\r\n    }\r\r\r\n    .metric-card.'
+  Card 5 at byte 2852: b'metric-card.active {\r\r\r\n        border-color: #4da6ff;\r\r\r\n        background: li'
+  Card 6 at byte 3047: b"metric-card.active::after {\r\r\r\n        content: '';\r\r\r\n        position: absolut"
+  Card 7 at byte 23233: b'metric-card{get_active_class("categories")}\'>\r\r\r\n            <div class=\'metric-'
+  Card 8 at byte 23856: b'metric-card{get_active_class("all")}\'>\r\r\r\n            <div class=\'metric-number\''
+  Card 9 at byte 24451: b'metric-card{get_active_class("healthy")}\'>\r\r\r\n            <div class=\'metric-num'
+  Card 10 at byte 25039: b'metric-card{get_active_class("warning")}\'>\r\r\r\n            <div class=\'metric-num'
+  Card 11 at byte 25632: b'metric-card{get_active_class("critical")}\'>\r\r\r\n            <div class=\'metric-nu'
+  Card 12 at byte 26339: b'metric-card{get_active_class("avg_health")}\'>\r\r\r\n            <div class=\'metric-'
+
+=== Total lines: 2609 ===
+
+KPI section starts at line 586
+  L590:         st.markdown("<div data-testid='metric-kpi-col'>", unsafe_allow_html=True)
+  L591:         st.button("", key="kpi_categories", use_container_width=True,
+  L593:         st.markdown(f"""
+  L594:         <div class='metric-card{get_active_class("categories")}'>
+  L595:             <div class='metric-number'>{stats.get('total_categories', stats['total_factories'])}</div>
+  L596:             <div class='metric-label'>🏷️ Categories</div>
+  L597:         </div>
+  L599:         st.markdown("</div>", unsafe_allow_html=True)
+  L602:         st.markdown("<div data-testid='metric-kpi-col'>", unsafe_allow_html=True)
+  L603:         st.button("", key="kpi_all", use_container_width=True,
+  L605:         st.markdown(f"""
+  L606:         <div class='metric-card{get_active_class("all")}'>
+  L607:             <div class='metric-number'>{stats['total_machines']}</div>
+  L608:             <div class='metric-label'>⚙️ Total Machines</div>
+  L609:         </div>
+  L611:         st.markdown("</div>", unsafe_allow_html=True)
+  L614:         st.markdown("<div data-testid='metric-kpi-col'>", unsafe_allow_html=True)
+  L615:         st.button("", key="kpi_healthy", use_container_width=True,
+  L617:         st.markdown(f"""
+  L618:         <div class='metric-card{get_active_class("healthy")}'>
+  L619:             <div class='metric-number'>{stats['healthy_count']}</div>
+  L620:             <div class='metric-label'>✅ Healthy</div>
+  L621:         </div>
+  L623:         st.markdown("</div>", unsafe_allow_html=True)
+  L626:         st.markdown("<div data-testid='metric-kpi-col'>", unsafe_allow_html=True)
+  L627:         st.button("", key="kpi_warning", use_container_width=True,
+  L629:         st.markdown(f"""
+  L630:         <div class='metric-card{get_active_class("warning")}'>
+  L631:             <div class='metric-number'>{stats['warning_count']}</div>
+  L632:             <div class='metric-label'>⚠️ Warning</div>
+  L633:         </div>
+  L635:         st.markdown("</div>", unsafe_allow_html=True)
+  L638:         st.markdown("<div data-testid='metric-kpi-col'>", unsafe_allow_html=True)
+  L639:         st.button("", key="kpi_critical", use_container_width=True,
+  L641:         st.markdown(f"""
+  L642:         <div class='metric-card{get_active_class("critical")}'>
+  L643:             <div class='metric-number'>{stats['critical_count']}</div>
+  L644:             <div class='metric-label'>🔴 Critical</div>
+  L645:         </div>
+  L647:         st.markdown("</div>", unsafe_allow_html=True)
+  L652:         st.markdown("<div data-testid='metric-kpi-col'>", unsafe_allow_html=True)
+  L653:         st.button("", key="kpi_avg_health", use_container_width=True,
+  L655:         st.markdown(f"""
+  L656:         <div class='metric-card{get_active_class("avg_health")}'>
+  L657:             <div class='metric-number'>{avg_health_display}</div>
+  L658:             <div class='metric-label'>💚 Avg Health</div>
+  L659:         </div>
+  L661:         st.markdown("</div>", unsafe_allow_html=True)
+  L663:     st.markdown("---")
+
+
+=== Checking for st.write/st.text/st.code with HTML content ===
+
+
+=== Checking for f-string quote issues in KPI area ===
+  L593: f-string start -> st.markdown(f"""
+  L605: f-string start -> st.markdown(f"""
+  L617: f-string start -> st.markdown(f"""
+  L629: f-string start -> st.markdown(f"""
+  L641: f-string start -> st.markdown(f"""
+  L655: f-string start -> st.markdown(f"""
+
+
+=== DONE ===

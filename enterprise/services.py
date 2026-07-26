@@ -20,8 +20,16 @@ SYNCHRONIZATION RULES:
 
 import uuid
 import random
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime, date, timedelta
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_DIR.parent
+for path in (str(PACKAGE_DIR), str(PROJECT_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from models import (
     MachineInfo, MachineStatus, Alert, AlertSeverity,
@@ -29,6 +37,9 @@ from models import (
     MachineType
 )
 from database import DatabaseManager
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # Initialize the database manager as a singleton
@@ -135,6 +146,40 @@ class WorkOrderService:
 
         return wo
 
+    def _get_realistic_maintenance_date(self, machine: Optional[MachineInfo] = None) -> datetime:
+        """Return a realistic maintenance timestamp with unique hour/minute/second per machine."""
+        # Use a unique random offset based on machine_id to prevent clustering
+        if machine and machine.last_maintenance_date:
+            # Spread across 30-180 days with random hours/minutes
+            days_offset = random.randint(30, 180)
+            hours_offset = random.randint(0, 23)
+            minutes_offset = random.randint(0, 59)
+            seconds_offset = random.randint(0, 59)
+            return min(
+                datetime.now(),
+                machine.last_maintenance_date + timedelta(
+                    days=days_offset,
+                    hours=hours_offset,
+                    minutes=minutes_offset,
+                    seconds=seconds_offset
+                )
+            )
+        # Random historical date spread across 45-180 days with unique time
+        return datetime.now() - timedelta(
+            days=random.randint(45, 180),
+            hours=random.randint(0, 23),
+            minutes=random.randint(0, 59),
+            seconds=random.randint(0, 59)
+        )
+
+    def _get_maintenance_type_for_work_order(self, wo: WorkOrder, machine: Optional[MachineInfo] = None) -> MaintenanceType:
+        """Use different maintenance types so the history looks less repetitive."""
+        if wo.priority == "High" or (machine and machine.status == MachineStatus.CRITICAL):
+            return random.choice([MaintenanceType.CORRECTIVE, MaintenanceType.REPLACEMENT, MaintenanceType.EMERGENCY])
+        if random.random() < 0.3:
+            return random.choice([MaintenanceType.PREVENTIVE, MaintenanceType.INSPECTION])
+        return MaintenanceType.PREVENTIVE
+
     def _create_scheduled_maintenance_log(self, wo: WorkOrder):
         """Create a Scheduled Maintenance Log when a work order is created.
         Only ONE maintenance log per work order is allowed.
@@ -145,9 +190,14 @@ class WorkOrderService:
             return
 
         # Check if a maintenance log already exists for this work order
+        logger.debug("_create_scheduled_maintenance_log checking existing logs for wo=%s machine=%s", wo.work_order_id, wo.machine_id)
         existing_log = store.maintenance_log_service.get_log_by_work_order(wo.work_order_id)
+        logger.debug("existing_log=%r", existing_log)
         if existing_log:
-            return  # Already exists, do not create duplicate
+            # If an existing log references a different machine, ignore the orphaned mapping
+            if existing_log.machine_id == wo.machine_id:
+                return  # Already exists for this work order and machine, do not create duplicate
+            logger.debug("existing_log for different machine (orphaned) machine=%s wo=%s", existing_log.machine_id, wo.work_order_id)
 
         # Check if there's already an active (Scheduled/In Progress) maintenance log for this machine
         logs = store.maintenance_log_service.get_logs_by_machine(wo.machine_id)
@@ -159,6 +209,7 @@ class WorkOrderService:
                     if existing_wo and existing_wo.status in (WorkOrderStatus.OPEN, WorkOrderStatus.IN_PROGRESS):
                         # There's already an active maintenance log for another active work order
                         # Don't create another one for this machine
+                        logger.debug("_create_scheduled_maintenance_log found active log %s status=%s", log.log_id, log.status)
                         return
             elif log.status in ("Scheduled", "In Progress") and not log.work_order_id:
                 # An orphaned active log exists - don't create another
@@ -174,29 +225,33 @@ class WorkOrderService:
         machine_name = wo.machine_name or (machine.name if machine else "")
         category = wo.category or (machine.machine_category if machine else "")
         before_health = wo.current_health_score or (machine.health_score if machine else 0.0)
-
-        estimated_duration = 2.0
+        maintenance_type = self._get_maintenance_type_for_work_order(wo, machine)
+        maintenance_date = self._get_realistic_maintenance_date(machine)
 
         store.maintenance_log_service.add_log(
             machine_id=wo.machine_id,
             technician=wo.assigned_technician,
-            maintenance_type=MaintenanceType.PREVENTIVE,
+            maintenance_type=maintenance_type,
             issue=wo.issue_description or wo.title,
-            action_taken="",
+            action_taken=self._get_realistic_maintenance_action(wo, machine),
             cost=0.0,
-            duration_hours=estimated_duration,
+            duration_hours=2.0,
             remarks="",
             work_order_id=wo.work_order_id,
             machine_name=machine_name,
             category=category,
-            description="Preventive maintenance scheduled automatically after AI prediction.",
-            start_time=datetime.now(),
+            description=(
+                f"{maintenance_type.value} maintenance scheduled automatically after AI prediction.\nIssue: {wo.issue_description or ''}"
+            ),
+            start_time=maintenance_date,
             end_time=None,
             downtime_hours=0.0,
             before_health=before_health,
             after_health=0.0,
-            status="Scheduled"
+            status="Scheduled",
+            maintenance_date=maintenance_date
         )
+        logger.debug("_create_scheduled_maintenance_log created log for %s machine=%s date=%s", wo.work_order_id, wo.machine_id, maintenance_date)
 
     def _assign_technician(self) -> str:
         """Auto-assign a technician (round-robin simulation)."""
@@ -249,10 +304,13 @@ class WorkOrderService:
         db.update_work_order(wo)
         return True
 
-    def get_work_orders_by_machine(self, machine_id: str) -> List[WorkOrder]:
-        """Get all work orders for a machine."""
+    def get_work_orders_by_machine(self, machine_id: str, include_completed: bool = False) -> List[WorkOrder]:
+        """Get active work orders for a machine by default, with optional history access."""
         db = get_db()
-        return db.get_work_orders_by_machine(machine_id)
+        work_orders = db.get_work_orders_by_machine(machine_id)
+        if include_completed:
+            return work_orders
+        return [wo for wo in work_orders if wo.status in (WorkOrderStatus.OPEN, WorkOrderStatus.IN_PROGRESS)]
 
     def get_work_orders_by_status(self, status: WorkOrderStatus) -> List[WorkOrder]:
         """Get work orders by status."""
@@ -311,9 +369,13 @@ class WorkOrderService:
             existing_wos = self.get_work_orders_by_machine(machine.machine_id)
             for existing in existing_wos:
                 if existing.status in (WorkOrderStatus.OPEN, WorkOrderStatus.IN_PROGRESS):
-                    # Update the existing work order with current machine data
                     existing.current_health_score = machine.health_score
                     existing.current_status = machine.status.value
+                    existing.issue_description = machine.cause or existing.issue_description
+                    existing.ai_recommendation = self._build_recommendation_from_cause(machine)
+                    # Link alert_id if not already set
+                    if alert and not existing.alert_id:
+                        existing.alert_id = alert.alert_id
                     db = get_db()
                     db.update_work_order(existing)
                     return existing
@@ -322,30 +384,24 @@ class WorkOrderService:
         maintenance_type = MaintenanceType.CORRECTIVE if is_critical else MaintenanceType.PREVENTIVE
         priority = "High" if is_critical else "Medium"
         due_date = date.today() if is_critical else date.today() + timedelta(days=1)
-        issue_description = (
-            f"{machine.name} is in {machine.status.value} status with "
-            f"{machine.health_score:.1f}% health."
-        )
-        ai_recommendation = (
-            "Perform corrective maintenance immediately and inspect critical subsystems."
-            if is_critical
-            else "Schedule preventive maintenance and inspect sensors before condition worsens."
-        )
+        # Debugging: ensure we capture what cause is present on the machine
+        logger.debug("auto_create_from_machine_status - machine=%s cause=%r recent=%s", machine.machine_id, machine.cause, getattr(machine, 'recent_failure_causes', []))
+        cause = machine.cause or "Performance drift"
+        # Prefer explicit or recent causes over the generic default so work orders
+        # and maintenance activities reflect meaningful root causes.
+        if not cause or not cause.strip() or cause.lower().startswith("sensor readings"):
+            recent = list(getattr(machine, "recent_failure_causes", []))
+            if recent:
+                cause = recent[-1]
+        issue_description = f"{machine.name} is in {machine.condition or machine.status.value.title()} condition with {machine.health_score:.1f}% health. Detected cause: {cause}."
+        ai_recommendation = self._build_recommendation_from_cause(machine)
+        title = self._build_work_order_title(machine, cause)
+        description = self._build_work_order_description(machine, cause, ai_recommendation, priority)
 
         wo = self.create_work_order(
             machine_id=machine.machine_id,
-            title=f"{maintenance_type.value} Maintenance: {machine.name}",
-            description=(
-                f"Machine ID: {machine.machine_id}\n"
-                f"Machine Name: {machine.name}\n"
-                f"Category: {machine.machine_category}\n"
-                f"Current Health Score: {machine.health_score:.1f}%\n"
-                f"Current Status: {machine.status.value}\n"
-                f"Priority: {priority}\n"
-                f"Maintenance Type: {maintenance_type.value}\n"
-                f"Issue Description: {issue_description}\n"
-                f"AI Recommendation: {ai_recommendation}"
-            ),
+            title=title,
+            description=description,
             priority=priority,
             scheduled_date=due_date,
             estimated_hours=self._estimate_hours(priority),
@@ -355,13 +411,61 @@ class WorkOrderService:
         wo.machine_name = machine.name
         wo.category = machine.machine_category
         wo.current_health_score = machine.health_score
-        wo.current_status = machine.status.value
+        wo.current_status = machine.condition or machine.status.value.title()
         wo.maintenance_type = maintenance_type.value
         wo.issue_description = issue_description
         wo.ai_recommendation = ai_recommendation
         db = get_db()
         db.update_work_order(wo)
         return wo
+
+    def _build_recommendation_from_cause(self, machine: MachineInfo) -> str:
+        cause = (machine.cause or "Performance drift").lower()
+        if "bearing" in cause or "drum" in cause:
+            return "Inspect and replace worn bearings or rebalance the drum assembly."
+        if "refrigerant" in cause or "cooling" in cause or "condenser" in cause or "evaporator" in cause:
+            return "Inspect the refrigeration circuit, recharge refrigerant if needed, and clean the condenser."
+        if "alternator" in cause or "voltage" in cause or "electrical" in cause:
+            return "Inspect electrical insulation, cooling paths, and replace failing components as needed."
+        if "oil" in cause or "coolant" in cause or "timing" in cause or "spark" in cause:
+            return "Perform engine diagnostics, replace worn consumables, and verify lubrication or cooling integrity."
+        if "pump" in cause or "motor" in cause or "fan" in cause:
+            return "Inspect the pump or motor assembly and replace degraded components."
+        return "Schedule targeted inspection and corrective maintenance based on the detected fault."
+
+    def _build_work_order_title(self, machine: MachineInfo, cause: str) -> str:
+        title_map = {
+            "bearing": "Bearing Replacement",
+            "drum": "Drum Inspection",
+            "refrigerant": "Refrigerant Leak Inspection",
+            "cooling": "Cooling System Inspection",
+            "alternator": "Alternator Cooling Inspection",
+            "voltage": "Electrical System Inspection",
+            "oil": "Oil System Diagnostics",
+            "coolant": "Cooling System Diagnostics",
+            "timing": "Timing Belt Inspection",
+            "spark": "Ignition Component Inspection",
+            "pump": "Pump Replacement",
+            "motor": "Motor Inspection",
+            "fan": "Fan Motor Replacement",
+        }
+        lower_cause = cause.lower()
+        for token, title in title_map.items():
+            if token in lower_cause:
+                return f"{title}: {machine.name}"
+        return f"Maintenance Required: {machine.name}"
+
+    def _build_work_order_description(self, machine: MachineInfo, cause: str, recommendation: str, priority: str) -> str:
+        return (
+            f"Machine ID: {machine.machine_id}\n"
+            f"Machine Name: {machine.name}\n"
+            f"Category: {machine.machine_category}\n"
+            f"Current Health Score: {machine.health_score:.1f}%\n"
+            f"Current Status: {machine.condition or machine.status.value.title()}\n"
+            f"Priority: {priority}\n"
+            f"Detected Cause: {cause}\n"
+            f"AI Recommendation: {recommendation}"
+        )
 
     # Parts lookup by machine category
     _PARTS_BY_CATEGORY = {
@@ -386,6 +490,20 @@ class WorkOrderService:
         parts = self._PARTS_BY_CATEGORY.get(category, ["General Component"])
         count = random.randint(1, min(3, len(parts)))
         return random.sample(parts, count)
+
+    def _get_realistic_maintenance_action(self, wo: WorkOrder, machine: Optional[MachineInfo] = None) -> str:
+        cause = (wo.issue_description or wo.description or "").lower()
+        if "bearing" in cause or "drum" in cause:
+            return "Bearing replacement and drum balancing"
+        if "refrigerant" in cause or "cooling" in cause or "condenser" in cause or "evaporator" in cause:
+            return "Refrigerant recharge and condenser cleaning"
+        if "alternator" in cause or "voltage" in cause or "electrical" in cause:
+            return "Electrical wiring repair and component testing"
+        if "oil" in cause or "coolant" in cause or "timing" in cause or "spark" in cause:
+            return "Lubrication completed and ignition system serviced"
+        if "pump" in cause or "motor" in cause or "fan" in cause:
+            return "Motor inspection and pump replacement"
+        return "System inspection and preventive maintenance"
 
     def _get_technician_remark(self) -> str:
         """Get a random technician remark."""
@@ -422,18 +540,29 @@ class WorkOrderService:
 
         before_health = existing_log.before_health or wo.current_health_score or (machine.health_score if machine else 0)
 
-        # Generate realistic maintenance values
-        maintenance_cost = round(random.uniform(500, 5000), 2)
-        actual_duration = round(random.uniform(1, 4), 1)
-        downtime = round(random.uniform(0.5, 2), 1)
-        completion_time = datetime.now()
-
         # Generate parts replaced based on machine category
         category = wo.category or (machine.machine_category if machine else "")
+
+        # Generate realistic maintenance values with unique timestamps
+        from simulation import _get_realistic_maintenance_cost
+        cause_text = wo.issue_description or wo.title or "General maintenance"
+        maintenance_cost = _get_realistic_maintenance_cost(cause_text, category)
+        actual_duration = round(random.uniform(1, 4), 1)
+        downtime = round(random.uniform(0.5, 2), 1)
+        
+        # Use a unique completion time per work order to prevent clustering
+        completion_time = existing_log.maintenance_date or datetime.now()
+        if completion_time > datetime.now():
+            completion_time = datetime.now()
+        # Add random microsecond offset so even same-second completions are unique
+        completion_time = completion_time.replace(microsecond=random.randint(0, 999999))
+
+        # Generate parts replaced based on machine category
         parts_replaced = self._get_parts_for_category(category)
 
         # Generate technician remarks
         remarks = self._get_technician_remark()
+        action_taken = self._get_realistic_maintenance_action(wo, machine)
 
         # Health After: improve by random 8-20%, never exceed 100%
         health_improvement = random.uniform(8, 20)
@@ -442,15 +571,21 @@ class WorkOrderService:
         if machine:
             machine.health_score = after_health
             machine.failure_probability = round(max(0.01, (100 - machine.health_score) / 100 * 0.45), 3)
-            if machine.health_score >= 70:
+            if machine.health_score >= 85:
                 machine.status = MachineStatus.NORMAL
             
             # CRITICAL: Update last_maintenance_date on the machine
             machine.last_maintenance_date = completion_time
             
-            # Calculate next maintenance date (30-90 days from now)
+            # Calculate next maintenance date (30-90 days from now with unique random time)
             next_maint_days = random.randint(30, 90)
-            machine.next_maintenance_date = completion_time + timedelta(days=next_maint_days)
+            next_maint_hours = random.randint(0, 23)
+            next_maint_minutes = random.randint(0, 59)
+            machine.next_maintenance_date = completion_time + timedelta(
+                days=next_maint_days,
+                hours=next_maint_hours,
+                minutes=next_maint_minutes
+            )
 
         maintenance_type = MaintenanceType.CORRECTIVE if wo.priority == "High" else MaintenanceType.PREVENTIVE
         if wo.maintenance_type:
@@ -467,7 +602,7 @@ class WorkOrderService:
             existing_log.log_id,
             status="Completed",
             maintenance_type=maintenance_type,
-            action_taken=wo.ai_recommendation or wo.description,
+            action_taken=action_taken,
             parts_replaced=parts_replaced,
             cost=maintenance_cost,
             duration_hours=actual_duration,
@@ -576,20 +711,29 @@ class MaintenanceLogService:
         downtime_hours: float = 0.0,
         before_health: float = 0.0,
         after_health: float = 0.0,
-        status: str = "Completed"
+        status: str = "Completed",
+        maintenance_date: Optional[datetime] = None
     ) -> MaintenanceLog:
         """Add a maintenance log entry.
         
         Only ONE maintenance log per work_order_id is allowed.
         If a log already exists for this work order, returns the existing one.
         """
+        logger.debug("MaintenanceLogService.add_log called for machine=%s work_order=%s", machine_id, work_order_id)
         db = get_db()
 
         # Check for duplicate work_order_id
         if work_order_id:
             existing = db.get_maintenance_log_by_work_order(work_order_id)
             if existing:
-                return existing
+                # If the existing log belongs to the same machine, return it to avoid duplicates.
+                # If it references a different machine (an orphaned mapping), ignore it and
+                # allow creation of a new log for this machine. Orphaned mappings are cleaned
+                # up by deduplication routines elsewhere.
+                if existing.machine_id == machine_id:
+                    return existing
+                else:
+                        logger.debug("add_log found orphaned maintenance log %s for work_order=%s machine=%s; creating new log for machine=%s", existing.log_id, work_order_id, existing.machine_id, machine_id)
 
         # Prevent duplicate active (Scheduled/In Progress) logs per machine
         existing_logs = db.get_maintenance_logs_by_machine(machine_id)
@@ -597,10 +741,17 @@ class MaintenanceLogService:
             if existing_log.status in ("Scheduled", "In Progress"):
                 return existing_log
 
+        # Ensure unique timestamp to prevent clustering
+        if maintenance_date is None:
+            maintenance_date = datetime.now()
+        # Add random microsecond offset for uniqueness
+        if maintenance_date.microsecond < 100000:
+            maintenance_date = maintenance_date.replace(microsecond=random.randint(0, 999999))
+
         log = MaintenanceLog(
             log_id=self._generate_id(),
             machine_id=machine_id,
-            maintenance_date=datetime.now(),
+            maintenance_date=maintenance_date,
             technician=technician,
             maintenance_type=maintenance_type,
             issue=issue,
@@ -612,7 +763,9 @@ class MaintenanceLogService:
             work_order_id=work_order_id,
             machine_name=machine_name,
             category=category,
-            description=description or action_taken,
+            # Prefer an explicit description, fall back to the issue text (cause) so that
+            # maintenance logs contain human-readable information about the root cause.
+            description=description or issue or action_taken,
             start_time=start_time,
             end_time=end_time,
             downtime_hours=downtime_hours if downtime_hours is not None else duration_hours,
@@ -626,7 +779,9 @@ class MaintenanceLogService:
     def get_logs_by_machine(self, machine_id: str) -> List[MaintenanceLog]:
         """Get all logs for a machine."""
         db = get_db()
-        return db.get_maintenance_logs_by_machine(machine_id)
+        logs = db.get_maintenance_logs_by_machine(machine_id)
+        logger.debug("get_logs_by_machine machine=%s count=%d", machine_id, len(logs))
+        return logs
 
     def get_recent_logs(self, days: int = 30) -> List[MaintenanceLog]:
         """Get logs from recent days."""
@@ -637,6 +792,100 @@ class MaintenanceLogService:
         """Get all maintenance logs."""
         db = get_db()
         return db.get_all_maintenance_logs()
+
+    def seed_historical_logs(self, machine: MachineInfo) -> List[MaintenanceLog]:
+        """Populate a realistic maintenance history for a machine based on its purchase date."""
+        db = get_db()
+        existing_logs = db.get_maintenance_logs_by_machine(machine.machine_id)
+        if existing_logs:
+            return existing_logs
+
+        if not machine.purchase_date:
+            machine.purchase_date = datetime.now() - timedelta(days=365)
+
+        start_date = machine.purchase_date
+        years_since_purchase = max(1, (datetime.now() - start_date).days // 365)
+        log_count = min(6, 2 + years_since_purchase)
+        logs = []
+        for idx in range(log_count):
+            # Each log gets a unique timestamp spread across the lifecycle
+            offset_days = 180 * (idx + 1) + random.randint(0, 60)
+            offset_hours = random.randint(0, 12 * (idx + 1))
+            offset_minutes = random.randint(0, 59)
+            maintenance_date = start_date + timedelta(
+                days=offset_days,
+                hours=offset_hours,
+                minutes=offset_minutes
+            )
+            if maintenance_date > datetime.now():
+                maintenance_date = datetime.now() - timedelta(
+                    days=random.randint(30, 180),
+                    hours=random.randint(0, 23),
+                    minutes=random.randint(0, 59)
+                )
+            maintenance_type = random.choice([MaintenanceType.INSPECTION, MaintenanceType.PREVENTIVE, MaintenanceType.CORRECTIVE, MaintenanceType.REPLACEMENT])
+            issue = self._issue_for_machine(machine, idx)
+            action = self._action_for_machine(machine, issue)
+            log = MaintenanceLog(
+                log_id=self._generate_id(),
+                machine_id=machine.machine_id,
+                maintenance_date=maintenance_date,
+                technician=random.choice(["Rajesh Kumar", "Priya Sharma", "Amit Singh", "Sneha Patel"]),
+                maintenance_type=maintenance_type,
+                issue=issue,
+                action_taken=action,
+                parts_replaced=self._parts_for_issue(issue, machine.machine_category),
+                cost=round(random.uniform(300, 3000), 2),
+                duration_hours=round(random.uniform(1, 4), 1),
+                remarks="",
+                machine_name=machine.name,
+                category=machine.machine_category,
+                description=action,
+                status="Completed",
+                created_date=maintenance_date,
+            )
+            db.insert_maintenance_log(log)
+            logs.append(log)
+        return logs
+
+    def _issue_for_machine(self, machine: MachineInfo, index: int) -> str:
+        issues = {
+            MachineType.WASHING_MACHINE: ["High drum vibration", "Bearing wear", "Water pump degradation", "Motor current exceeded threshold"],
+            MachineType.REFRIGERATOR: ["Compressor overheating", "Door seal leakage", "Cooling efficiency reduced", "Evaporator icing"],
+            MachineType.AIR_CONDITIONER: ["Condenser overheating", "Low refrigerant pressure", "Compressor overload", "Fan motor failure"],
+            MachineType.GENERATOR: ["Alternator overheating", "Fuel pressure fluctuation", "Voltage instability", "Engine vibration increased"],
+            MachineType.CAR_ENGINE: ["Low oil pressure", "Coolant overheating", "Spark plug degradation", "Timing belt wear"],
+        }
+        candidates = issues.get(machine.machine_type, ["Performance drift"])
+        return candidates[index % len(candidates)]
+
+    def _action_for_machine(self, machine: MachineInfo, issue: str) -> str:
+        lower_issue = issue.lower()
+        if "bearing" in lower_issue or "drum" in lower_issue:
+            return "Drum bearings replaced and alignment recalibrated"
+        if "refrigerant" in lower_issue or "cooling" in lower_issue or "condenser" in lower_issue or "evaporator" in lower_issue:
+            return "Refrigerant recharged and condenser cleaned"
+        if "alternator" in lower_issue or "voltage" in lower_issue:
+            return "Electrical wiring repaired and alternator tested"
+        if "oil" in lower_issue or "coolant" in lower_issue or "timing" in lower_issue or "spark" in lower_issue:
+            return "Lubrication completed and ignition or cooling components serviced"
+        if "pump" in lower_issue or "motor" in lower_issue or "fan" in lower_issue:
+            return "Motor serviced and pump or fan replaced"
+        return "Preventive maintenance completed"
+
+    def _parts_for_issue(self, issue: str, category: str) -> List[str]:
+        lower_issue = issue.lower()
+        if "bearing" in lower_issue:
+            return ["Bearing Kit"]
+        if "refrigerant" in lower_issue or "cooling" in lower_issue or "condenser" in lower_issue or "evaporator" in lower_issue:
+            return ["Condenser Coil", "Filter"]
+        if "alternator" in lower_issue or "voltage" in lower_issue:
+            return ["Voltage Regulator"]
+        if "oil" in lower_issue or "coolant" in lower_issue or "timing" in lower_issue or "spark" in lower_issue:
+            return ["Gasket", "Sensor"]
+        if "pump" in lower_issue or "motor" in lower_issue or "fan" in lower_issue:
+            return ["Motor", "Pump"]
+        return ["General Component"]
 
     def get_total_maintenance_cost(self, machine_id: Optional[str] = None) -> float:
         """Get total maintenance cost."""
@@ -750,8 +999,18 @@ class AlertService:
         """Return True if a machine already has an OPEN alert."""
         return self.get_active_alert_by_machine(machine_id) is not None
 
+    def _get_alert_timestamp(self, machine: MachineInfo) -> datetime:
+        """Create a realistic alert timestamp based on machine activity history."""
+        now = datetime.now()
+        if machine.last_maintenance_date:
+            days_since_maintenance = max(7, min(365, (now - machine.last_maintenance_date).days))
+            return now - timedelta(days=days_since_maintenance + (7 if machine.status == MachineStatus.WARNING else 0))
+        if machine.operating_hours:
+            return now - timedelta(days=int(min(180, max(7, machine.operating_hours / 8))))
+        return now
+
     def create_alert(self, machine_id: str, severity: AlertSeverity,
-                     reason: str, recommended_action: str) -> Alert:
+                     reason: str, recommended_action: str, timestamp: Optional[datetime] = None) -> Alert:
         """Create a new alert.
         
         If an active alert already exists for this machine, returns the existing one.
@@ -768,7 +1027,7 @@ class AlertService:
             machine_id=machine_id,
             severity=severity,
             reason=reason,
-            timestamp=datetime.now(),
+            timestamp=timestamp or datetime.now(),
             recommended_action=recommended_action
         )
         db = get_db()
@@ -834,7 +1093,16 @@ class AlertService:
             if machine.status == MachineStatus.CRITICAL
             else "Schedule preventive maintenance"
         )
-        reason = f"{machine_type_name} {machine.status.value.lower()} condition detected"
+        if machine.cause:
+            reason = machine.cause if machine.cause.endswith('.') else f"{machine.cause} detected"
+        else:
+            reason = (
+                f"{machine_type_name} critical fault detected"
+                if machine.status == MachineStatus.CRITICAL
+                else f"{machine_type_name} performance drift detected"
+            )
+        if machine.machine_id:
+            reason = f"{reason} on {machine.machine_id}"
 
         # Check existing open alerts for this machine
         existing = self.get_active_alert_by_machine(machine.machine_id)
@@ -868,11 +1136,14 @@ class AlertService:
                 db.update_alert(existing)
             return existing
 
+        # Active alerts must use the current simulation timestamp, not historical dates.
+        # Historical alerts belong in Alert History, not as active alerts.
         return self.create_alert(
             machine_id=machine.machine_id,
             severity=expected_severity,
             reason=reason,
-            recommended_action=recommended_action
+            recommended_action=recommended_action,
+            timestamp=datetime.now()
         )
 
     def acknowledge_alert(self, alert_id: str, acknowledged_by: str) -> bool:
@@ -999,11 +1270,12 @@ class SynchronizationEngine:
         Steps:
         1. Ensure machine.status is correct based on health_score
         2. Deduplicate any existing duplicates
-        3. Synchronize work orders FIRST (completing work orders may change health/status)
-        4. RELOAD machine from DB after work order processing (to get updated health/status)
-        5. Recalculate status AGAIN after work order changes
-        6. Synchronize alert to match final machine.status
-        7. Persist machine changes
+        3. Synchronize alert FIRST (so work order can link to it)
+        4. Synchronize work orders (with alert_id from step 3)
+        5. RELOAD machine from DB after work order processing
+        6. DERIVE last_maintenance_date from latest completed maintenance log
+        7. Recalculate status AGAIN after work order changes
+        8. Persist machine changes
         """
         from simulation import EnterpriseSimulator
         db = get_db()
@@ -1017,19 +1289,28 @@ class SynchronizationEngine:
         data_store.alert_service.deduplicate_alerts(machine.machine_id)
         data_store.work_order_service.deduplicate_work_orders(machine.machine_id)
         data_store.maintenance_log_service.deduplicate_maintenance_logs(machine.machine_id)
+
+        # Ensure only one active work order and one active alert remain for the machine
+        active_wos = [wo for wo in db.get_work_orders_by_machine(machine.machine_id) if wo.status in (WorkOrderStatus.OPEN, WorkOrderStatus.IN_PROGRESS)]
+        if len(active_wos) > 1:
+            for wo in active_wos[1:]:
+                wo.status = WorkOrderStatus.CANCELLED
+                db.update_work_order(wo)
         
-        # Step 3: Synchronize work orders FIRST
-        # Work order completion can change machine health/status (via _complete_maintenance_log_from_work_order)
-        # so we must do this BEFORE alert synchronization
+        # Step 3: Synchronize alert FIRST (before work order)
+        # This ensures the alert exists and can be linked to the work order
+        if machine.status in (MachineStatus.WARNING, MachineStatus.CRITICAL):
+            data_store.alert_service.auto_create_from_machine_status(machine)
+        
+        # Step 4: Synchronize work orders (with alert_id from step 3)
         if machine.status in (MachineStatus.WARNING, MachineStatus.CRITICAL):
             alert = data_store.alert_service.get_active_alert_by_machine(machine.machine_id)
             data_store.work_order_service.auto_create_from_machine_status(machine, alert)
         elif machine.status == MachineStatus.NORMAL:
             # Close all open work orders for this machine
-            # This may change machine health/status via _complete_maintenance_log_from_work_order
             self._close_open_work_orders(machine)
         
-        # Step 4: RELOAD machine from DB to pick up any changes from work order completion
+        # Step 5: RELOAD machine from DB to pick up any changes from work order completion
         db_machine = db.get_machine(machine.machine_id)
         if db_machine:
             machine.health_score = db_machine.health_score
@@ -1038,13 +1319,19 @@ class SynchronizationEngine:
             machine.last_maintenance_date = db_machine.last_maintenance_date
             machine.next_maintenance_date = db_machine.next_maintenance_date
         
-        # Step 5: Recalculate status AFTER work order changes (maintenance may have improved health)
+        # Step 6: Derive last_maintenance_date from the latest completed maintenance log
+        # This ensures Machine Details always shows the same date as Maintenance Logs
+        latest_log = db.get_latest_completed_maintenance_log(machine.machine_id)
+        if latest_log:
+            machine.last_maintenance_date = latest_log.maintenance_date
+        elif machine.last_maintenance_date is not None:
+            # No completed maintenance logs exist - clear the fake date
+            machine.last_maintenance_date = None
+        
+        # Step 7: Recalculate status AFTER work order changes (maintenance may have improved health)
         self._recalculate_status(machine)
         
-        # Step 6: Synchronize alert to match FINAL machine status
-        data_store.alert_service.auto_create_from_machine_status(machine)
-        
-        # Step 7: Persist machine changes
+        # Step 8: Persist machine changes
         db.update_machine(machine)
     
     def _close_open_work_orders(self, machine: MachineInfo) -> int:
@@ -1068,14 +1355,39 @@ class SynchronizationEngine:
                 count += 1
         return count
     
+    def _get_effective_status(self, machine: MachineInfo) -> MachineStatus:
+        """Return the authoritative machine state from ML prediction when available."""
+        ml_prediction = getattr(machine, "ml_prediction", None) or {}
+        predicted_status = ml_prediction.get("predicted_status")
+        if isinstance(predicted_status, str):
+            normalized_status = predicted_status.upper()
+            if normalized_status == "CRITICAL":
+                return MachineStatus.CRITICAL
+            if normalized_status == "WARNING":
+                return MachineStatus.WARNING
+            if normalized_status == "NORMAL":
+                return MachineStatus.NORMAL
+
+        if machine.health_score < 60:
+            return MachineStatus.CRITICAL
+        if machine.health_score < 85:
+            return MachineStatus.WARNING
+        return MachineStatus.NORMAL
+
     def _recalculate_status(self, machine: MachineInfo) -> None:
-        """Recalculate machine status from health score (single source of truth)."""
-        if machine.health_score < 40:
-            machine.status = MachineStatus.CRITICAL
-        elif machine.health_score < 70:
-            machine.status = MachineStatus.WARNING
+        """Recalculate the authoritative machine state while preserving ML-driven decisions."""
+        machine.status = self._get_effective_status(machine)
+        machine.condition = "Critical" if machine.status == MachineStatus.CRITICAL else "Warning" if machine.status == MachineStatus.WARNING else "Normal"
+        if not machine.cause:
+            machine.cause = "Sensor readings within normal range"
+        if machine.status == MachineStatus.CRITICAL or machine.health_score < 60 or machine.failure_probability >= 0.55:
+            machine.maintenance_recommendation = "Immediate Inspection Required"
+        elif machine.status == MachineStatus.WARNING or machine.health_score < 85 or machine.failure_probability >= 0.25:
+            machine.maintenance_recommendation = "Within 7 Days"
+        elif machine.failure_probability >= 0.12:
+            machine.maintenance_recommendation = "Within 14 Days"
         else:
-            machine.status = MachineStatus.NORMAL
+            machine.maintenance_recommendation = "Within 30 Days"
     
     def synchronize_all(self) -> None:
         """
@@ -1106,12 +1418,8 @@ class SynchronizationEngine:
         issues = []
         
         for machine in all_machines:
-            # Check 1: Machine status matches health score
-            expected_status = MachineStatus.NORMAL
-            if machine.health_score < 40:
-                expected_status = MachineStatus.CRITICAL
-            elif machine.health_score < 70:
-                expected_status = MachineStatus.WARNING
+            # Check 1: Machine status follows the authoritative ML-driven state when available
+            expected_status = self._get_effective_status(machine)
             
             if machine.status != expected_status:
                 issues.append(f"{machine.machine_id}: status={machine.status.value} but health={machine.health_score}% (expected {expected_status.value})")
@@ -1156,6 +1464,12 @@ class SynchronizationEngine:
             completed_logs = [log for log in logs if log.status == "Completed"]
             if completed_logs and machine.last_maintenance_date is None:
                 issues.append(f"{machine.machine_id}: has {len(completed_logs)} completed maintenance logs but last_maintenance_date is None")
+            
+            # Check 7: Last maintenance date must match latest completed log
+            if completed_logs:
+                latest_log = completed_logs[0]  # Already sorted DESC by DB query
+                if machine.last_maintenance_date != latest_log.maintenance_date:
+                    issues.append(f"{machine.machine_id}: last_maintenance_date ({machine.last_maintenance_date}) != latest completed log date ({latest_log.maintenance_date})")
         
         # Check 7: Dashboard counts match machine states
         critical_machines = sum(1 for m in all_machines if m.status == MachineStatus.CRITICAL)
@@ -1207,13 +1521,8 @@ class SynchronizationEngine:
         
         repair_count = 0
         for machine in simulator.get_all_machines():
-            # Force recalculate status
-            if machine.health_score < 40:
-                machine.status = MachineStatus.CRITICAL
-            elif machine.health_score < 70:
-                machine.status = MachineStatus.WARNING
-            else:
-                machine.status = MachineStatus.NORMAL
+            # Force recalculate status using the same authoritative logic as runtime
+            machine.status = self._get_effective_status(machine)
             
             # Force deduplicate
             data_store.alert_service.deduplicate_alerts(machine.machine_id)
@@ -1234,13 +1543,14 @@ class SynchronizationEngine:
     
     def _backfill_maintenance_dates(self) -> int:
         """
-        Backfill last_maintenance_date for machines that have completed
-        maintenance logs but no last_maintenance_date set.
+        Fix last_maintenance_date for ALL machines by deriving it from the latest 
+        completed maintenance log.
         
-        This handles pre-existing data that was created before the
-        last_maintenance_date tracking was implemented.
+        This handles:
+        1. Machines with no last_maintenance_date set
+        2. Machines with mismatched last_maintenance_date (different from latest log)
         
-        Returns the number of machines backfilled.
+        Returns the number of machines corrected.
         """
         from simulation import EnterpriseSimulator
         simulator = EnterpriseSimulator()
@@ -1248,25 +1558,27 @@ class SynchronizationEngine:
         
         count = 0
         for machine in simulator.get_all_machines():
-            if machine.last_maintenance_date is not None:
-                continue  # Already has a date
+            # Get the latest completed maintenance log
+            latest_log = db.get_latest_completed_maintenance_log(machine.machine_id)
             
-            # Check for completed maintenance logs
-            logs = db.get_maintenance_logs_by_machine(machine.machine_id)
-            completed_logs = [log for log in logs if log.status == "Completed"]
-            
-            if completed_logs:
-                # Use the most recent completed maintenance date
-                most_recent = max(completed_logs, key=lambda log: log.maintenance_date)
-                machine.last_maintenance_date = most_recent.maintenance_date
-                
-                # Also set next_maintenance_date if not set (30-90 days from last)
-                if machine.next_maintenance_date is None:
-                    next_maint_days = random.randint(30, 90)
-                    machine.next_maintenance_date = machine.last_maintenance_date + timedelta(days=next_maint_days)
-                
-                db.update_machine(machine)
-                count += 1
+            if latest_log:
+                # Derive last_maintenance_date from the maintenance log
+                if machine.last_maintenance_date != latest_log.maintenance_date:
+                    machine.last_maintenance_date = latest_log.maintenance_date
+                    
+                    # Also set next_maintenance_date if not set (30-90 days from last)
+                    if machine.next_maintenance_date is None:
+                        next_maint_days = random.randint(30, 90)
+                        machine.next_maintenance_date = machine.last_maintenance_date + timedelta(days=next_maint_days)
+                    
+                    db.update_machine(machine)
+                    count += 1
+            else:
+                # No completed maintenance logs exist - clear any fake date
+                if machine.last_maintenance_date is not None:
+                    machine.last_maintenance_date = None
+                    db.update_machine(machine)
+                    count += 1
         
         return count
 

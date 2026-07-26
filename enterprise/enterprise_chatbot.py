@@ -9,11 +9,14 @@ Reuses existing AI agents and knowledge base.
 import re
 import os
 import sys
+from pathlib import Path
 
-# Add the project root to Python's import path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Add the project root and package directory to Python's import path
+PACKAGE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_DIR.parent
+for path in (str(PACKAGE_DIR), str(PROJECT_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
@@ -29,6 +32,7 @@ from simulation import EnterpriseSimulator
 from analytics import AnalyticsEngine, get_analytics_engine
 from services import get_data_store
 from reports import ReportGenerator, get_report_generator
+from ml_model import get_predictor, predict_machine_status
 
 
 ACTIVE_MACHINE_TYPES = {
@@ -218,12 +222,31 @@ class EnterpriseCopilot:
 
     def _build_machine_analysis(self, machine: MachineInfo) -> Dict:
         """Build analysis dict compatible with existing chatbot."""
+        issues = self._get_machine_issues(machine)
+        
+        # Add ML prediction insights
+        ml_pred = getattr(machine, 'ml_prediction', None)
+        if ml_pred:
+            ml_insight = {
+                "sensor": "ML Prediction",
+                "severity": ml_pred.get("predicted_status", "NORMAL"),
+                "description": (
+                    f"ML model predicts {ml_pred.get('predicted_status', 'NORMAL')} "
+                    f"with {ml_pred.get('confidence', 0)*100:.1f}% confidence. "
+                    f"Probabilities: NORMAL={ml_pred.get('probabilities', {}).get('NORMAL', 0)*100:.1f}%, "
+                    f"WARNING={ml_pred.get('probabilities', {}).get('WARNING', 0)*100:.1f}%, "
+                    f"CRITICAL={ml_pred.get('probabilities', {}).get('CRITICAL', 0)*100:.1f}%"
+                )
+            }
+            issues.insert(0, ml_insight)
+        
         return {
             "monitoring": {
                 "severity": machine.status.value,
-                "issues": self._get_machine_issues(machine)
+                "issues": issues
             },
-            "sensor_history": []  # Will be populated when sensors are read
+            "sensor_history": [],
+            "ml_prediction": ml_pred  # Pass ML prediction to downstream
         }
 
     def _get_machine_issues(self, machine: MachineInfo) -> List[Dict]:
@@ -239,13 +262,13 @@ class EnterpriseCopilot:
                 "description": alert.recommended_action
             })
         
-        if machine.health_score < 40:
+        if machine.health_score < 60:
             issues.append({
                 "sensor": "health",
                 "severity": "CRITICAL",
                 "description": f"Health score critically low: {machine.health_score}"
             })
-        elif machine.health_score < 70:
+        elif machine.health_score < 85:
             issues.append({
                 "sensor": "health",
                 "severity": "WARNING",
@@ -283,9 +306,9 @@ class EnterpriseCopilot:
         open_alerts = [a for a in alerts if a.status == "Open"]
         
         reasons = []
-        if machine.health_score < 40:
+        if machine.health_score < 60:
             reasons.append(f"🔴 **Critical Health**: Health score is only {machine.health_score}/100")
-        elif machine.health_score < 70:
+        elif machine.health_score < 85:
             reasons.append(f"🟡 **Warning Health**: Health score is {machine.health_score}/100")
         
         reasons.append(f"📊 **Failure Probability**: {machine.failure_probability*100:.1f}%")

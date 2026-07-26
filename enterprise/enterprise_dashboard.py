@@ -23,7 +23,7 @@ from models import (
     MachineType, MachineStatus, MachineInfo, AlertSeverity,
     WorkOrderStatus, MaintenanceType, MACHINE_TYPE_SENSORS
 )
-from simulation import EnterpriseSimulator
+from simulation import EnterpriseSimulator, FAILURE_CAUSE_LIBRARY, MAINTENANCE_ACTION_LIBRARY
 from analytics import AnalyticsEngine, get_analytics_engine, TrendAnalyzer
 from services import get_data_store, WorkOrderService, AlertService
 from reports import ReportGenerator, get_report_generator
@@ -39,7 +39,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for dark enterprise theme
+    # Custom CSS for dark enterprise theme
 st.markdown("""
 <style>
     .main-header { font-size: 2.2rem; font-weight: 700; margin-bottom: 0; }
@@ -79,6 +79,35 @@ st.markdown("""
     .machine-link-btn:hover {
         background: #4da6ff;
         color: #ffffff !important;
+    }
+    /* Style Streamlit buttons to look exactly like KPI metric cards */
+    .stButton button[kpi-card="true"] {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%) !important;
+        border-radius: 12px !important;
+        padding: 18px 18px !important;
+        border: 1px solid #2a2a4a !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important;
+        color: inherit !important;
+        font-family: inherit !important;
+        font-size: inherit !important;
+        line-height: normal !important;
+        text-align: center !important;
+        transition: all 0.2s ease !important;
+        min-height: 0 !important;
+        height: auto !important;
+    }
+    .stButton button[kpi-card="true"]:hover {
+        border-color: #4da6ff !important;
+        box-shadow: 0 4px 12px rgba(77, 166, 255, 0.3) !important;
+    }
+    .stButton button[kpi-card="true"] p {
+        font-size: inherit !important;
+        font-weight: inherit !important;
+        color: inherit !important;
+        margin: 0 !important;
+        line-height: normal !important;
+        white-space: pre-wrap !important;
+        text-align: center !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -127,6 +156,8 @@ def init_session_state():
         st.session_state.data_refreshed = False
     if "simulation_running" not in st.session_state:
         st.session_state.simulation_running = False
+    if "simulation_refresh_counter" not in st.session_state:
+        st.session_state.simulation_refresh_counter = 0
 
 init_session_state()
 
@@ -191,7 +222,12 @@ def render_sidebar():
         # Simulation Controls
         st.markdown("### 🎮 Simulation Controls")
         if st.button("🔄 Refresh Data", use_container_width=True):
+            # CRITICAL: Invalidate ALL cached/generated data
+            st.session_state.simulation_refresh_counter += 1
             from services import get_sync_engine
+            # Purge DB history before regenerating
+            db = __import__('enterprise.database', fromlist=['DatabaseManager']).DatabaseManager()
+            # Run full health degradation simulation
             simulator.simulate_health_degradation()
             # Validate and repair any inconsistencies after simulation
             sync_engine = get_sync_engine()
@@ -256,6 +292,7 @@ def render_dashboard():
     all_machines = simulator.get_all_machines()
 
     search_term = st.text_input("Global Search", placeholder="Search Equipment...")
+    status_color = "#888"
     if search_term:
         needle = search_term.lower()
         matching_machines = [
@@ -276,7 +313,7 @@ def render_dashboard():
                 <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                             border-radius: 12px; padding: 15px; margin: 8px 0;
                             border-left: 4px solid {status_color};'>
-                    <h3 style='margin:0;'>{machine.machine_id}</h3>
+                    <h3 style='margin:0;'><a href="?navigate={machine.machine_id}" style="color:inherit;text-decoration:none;">{machine.machine_id}</a></h3>
                     <p style='margin:2px 0; color: #aaa;'>{machine.name}</p>
                     <p style='margin:2px 0; color: #ddd;'>{machine.manufacturer}</p>
                     <p style='margin:2px 0; font-size: 0.85rem; color: #888;'>
@@ -284,60 +321,57 @@ def render_dashboard():
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
-                if st.button("View Details", key=f"search_view_{machine.machine_id}", use_container_width=True):
-                    navigate_to_machine(machine.machine_id)
-                    st.rerun()
 
     # === KPI METRICS ===
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-value'>{stats.get('total_categories', stats['total_factories'])}</div>
-            <div class='metric-label'>🏷️ Categories</div>
-        </div>
-        """, unsafe_allow_html=True)
+        categories_value = stats.get('total_categories', stats['total_factories'])
+        categories_label = f'🏷️ Categories\n{categories_value}'
+        if st.button(f"{categories_value}\n\n🏷️ Categories", key="kpi_cat", use_container_width=True):
+            st.session_state.page = "kpi_categories"
+            st.session_state.selected_factory = None
+            st.session_state.selected_machine = None
+            st.session_state.kpi_filter = None
+            st.rerun()
     
     with col2:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-value'>{stats['total_machines']}</div>
-            <div class='metric-label'>⚙️ Total Machines</div>
-        </div>
-        """, unsafe_allow_html=True)
+        if st.button(f'{stats["total_machines"]}\n\n⚙️ Total Machines', key="kpi_mach", use_container_width=True):
+            st.session_state.page = "kpi_machines"
+            st.session_state.selected_factory = None
+            st.session_state.selected_machine = None
+            st.session_state.kpi_filter = "all"
+            st.rerun()
     
     with col3:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-value' style='color: #44CC44;'>{stats['healthy_count']}</div>
-            <div class='metric-label'>✅ Healthy</div>
-        </div>
-        """, unsafe_allow_html=True)
+        if st.button(f'{stats["healthy_count"]}\n\n✅ Healthy', key="kpi_heal", use_container_width=True):
+            st.session_state.page = "kpi_healthy"
+            st.session_state.selected_factory = None
+            st.session_state.selected_machine = None
+            st.session_state.kpi_filter = "healthy"
+            st.rerun()
     
     with col4:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-value' style='color: #FFAA00;'>{stats['warning_count']}</div>
-            <div class='metric-label'>⚠️ Warning</div>
-        </div>
-        """, unsafe_allow_html=True)
+        if st.button(f'{stats["warning_count"]}\n\n⚠️ Warning', key="kpi_warn", use_container_width=True):
+            st.session_state.page = "kpi_warning"
+            st.session_state.selected_factory = None
+            st.session_state.selected_machine = None
+            st.session_state.kpi_filter = "warning"
+            st.rerun()
     
     with col5:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-value' style='color: #FF4444;'>{stats['critical_count']}</div>
-            <div class='metric-label'>🔴 Critical</div>
-        </div>
-        """, unsafe_allow_html=True)
+        if st.button(f'{stats["critical_count"]}\n\n🔴 Critical', key="kpi_crit", use_container_width=True):
+            st.session_state.page = "kpi_critical"
+            st.session_state.selected_factory = None
+            st.session_state.selected_machine = None
+            st.session_state.kpi_filter = "critical"
+            st.rerun()
     
     with col6:
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-value'>{stats['average_health']}%</div>
-            <div class='metric-label'>💚 Avg Health</div>
-        </div>
-        """, unsafe_allow_html=True)
+        if st.button(f'{stats["average_health"]}%\n\n💚 Avg Health', key="kpi_avg", use_container_width=True):
+            st.session_state.page = "analytics"
+            st.session_state.kpi_filter = None
+            st.rerun()
     
     st.markdown("---")
     
@@ -433,21 +467,40 @@ def render_dashboard():
     
     if open_alerts:
         st.caption(f"Showing latest {min(10, len(open_alerts))} alerts")
+        alert_rows = []
         for a in recent_alerts:
-            machine = simulator.get_machine(a.machine_id)
-            severity_color = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}.get(a.severity.value, "#888")
-            col_a, col_b, col_c, col_d = st.columns([1.5, 1.5, 3, 1.5])
-            with col_a:
-                st.markdown(f"<span style='color:{severity_color};font-weight:bold;'>{a.severity.value}</span>", unsafe_allow_html=True)
-            with col_b:
-                machine_name = machine.name if machine else "N/A"
-                st.markdown(f"<span style='color:#ccc;'>{machine_name}</span>", unsafe_allow_html=True)
-            with col_c:
-                st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{a.reason[:60]}</span>", unsafe_allow_html=True)
-            with col_d:
-                if st.button(f"🔍 {a.machine_id}", key=f"dash_alert_{a.alert_id}", use_container_width=True):
-                    navigate_to_machine(a.machine_id)
-                    st.rerun()
+            condition = a.severity.value
+            condition_color = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}.get(condition, "#888")
+            alert_rows.append({
+                "Machine ID": a.machine_id,
+                "Alert ID": a.alert_id[:12],
+                "Description": a.reason[:60],
+                "Date": a.timestamp.strftime('%Y-%m-%d %H:%M'),
+                "Condition": condition,
+                "__condition_color": condition_color,
+                "Status": a.status
+            })
+        if alert_rows:
+            df_alerts = pd.DataFrame(alert_rows)
+            df_alerts["Machine ID"] = df_alerts["Machine ID"].apply(
+                lambda mid: f"?navigate={mid}"
+            )
+            df_display = df_alerts.drop(columns=["__condition_color"], errors="ignore")
+            st.dataframe(
+                df_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
+                        help="Click to view machine maintenance history",
+                        display_text=r"\?navigate=(.*)"),
+                    "Alert ID": st.column_config.Column("Alert ID", width="small"),
+                    "Description": st.column_config.Column("Description", width="large"),
+                    "Date": st.column_config.Column("Date", width="medium"),
+                    "Condition": st.column_config.Column("Condition", width="small"),
+                    "Status": st.column_config.Column("Status", width="small"),
+                }
+            )
     else:
         st.info("✅ No open alerts. All systems normal.")
     
@@ -455,26 +508,35 @@ def render_dashboard():
     st.markdown("---")
     st.subheader("⚙️ All Machines Health Status")
     
+    machine_rows = []
     for m in sorted(all_machines, key=lambda x: x.health_score):
-        status_color = STATUS_COLORS.get(m.status.value, "#888")
-        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
-        with col_a:
-            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
-        with col_b:
-            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
-        with col_c:
-            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
-        with col_d:
-            st.markdown(f"<span style='color:#ddd;'>{m.health_score}%</span>", unsafe_allow_html=True)
-        with col_e:
-            st.markdown(f"<span style='color:#ffaa00;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
-        with col_f:
-            badge_color = STATUS_COLORS.get(m.status.value, "#888")
-            st.markdown(f"<span style='background:{badge_color};color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>{m.status.value}</span>", unsafe_allow_html=True)
-        with col_g:
-            if st.button("View", key=f"dash_machine_{m.machine_id}", use_container_width=True):
-                navigate_to_machine(m.machine_id)
-                st.rerun()
+        machine_rows.append({
+            "Machine ID": m.machine_id,
+            "Category": m.machine_type.value,
+            "Health Score": f"{m.health_score:.1f}%",
+            "Failure Probability": f"{m.failure_probability*100:.1f}%",
+            "Condition": m.status.value
+        })
+    
+    if machine_rows:
+        df_machines = pd.DataFrame(machine_rows)
+        df_machines["Machine ID"] = df_machines["Machine ID"].apply(
+            lambda mid: f"?navigate={mid}"
+        )
+        st.dataframe(
+            df_machines,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
+                    help="Click to view machine maintenance history",
+                    display_text=r"\?navigate=(.*)"),
+                "Category": st.column_config.Column("Category", width="medium"),
+                "Health Score": st.column_config.Column("Health Score", width="small"),
+                "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
+                "Condition": st.column_config.Column("Condition", width="small"),
+            }
+        )
 
 
 # ==================== MACHINES PAGE ====================
@@ -600,7 +662,7 @@ def render_machine_category_detail(factory_id: str):
             <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                         border-radius: 12px; padding: 15px; margin: 8px 0;
                         border-left: 4px solid {status_color};'>
-                <h3 style='margin:0;'>{machine.machine_id}</h3>
+                <h3 style='margin:0;'><a href="?navigate={machine.machine_id}" style="color:inherit;text-decoration:none;">{machine.machine_id}</a></h3>
                 <p style='margin:2px 0; color: #aaa;'>{machine.name}</p>
                 <p style='margin:2px 0; color: #ddd;'>{machine.manufacturer}</p>
                 <p style='margin:6px 0;'>
@@ -693,16 +755,11 @@ def render_machine_info_tab(machine: MachineInfo):
         st.markdown("### ℹ️ Machine Information")
         info_data = {
             "Machine ID": machine.machine_id,
-            "Name": machine.name,
-            "Type": machine.machine_type.value,
             "Manufacturer": machine.manufacturer,
             "Category": machine.machine_category,
             "Model": machine.model_number,
             "Installation Date": machine.installation_date.strftime("%Y-%m-%d") if machine.installation_date else "N/A",
-            "Operating Hours": f"{machine.operating_hours:.0f}h",
-            "Status": f"🟢 {machine.status.value}" if machine.status == MachineStatus.NORMAL else (
-                      f"🟡 {machine.status.value}" if machine.status == MachineStatus.WARNING else
-                      f"🔴 {machine.status.value}")
+            "Purchase Date": machine.purchase_date.strftime("%Y-%m-%d") if machine.purchase_date else "N/A",
         }
         
         for label, value in info_data.items():
@@ -710,15 +767,24 @@ def render_machine_info_tab(machine: MachineInfo):
     
     with col2:
         st.markdown("### 📊 Performance KPIs")
+        # Derive Last Maintenance from the NEWEST CLOSED alert in Alert History
+        # This ensures KPI always matches the second row in the Alert History table
+        alerts = data_store.alert_service.get_alerts_by_machine(machine.machine_id)
+        closed_alerts = [a for a in alerts if a.status == "Closed"]
+        if closed_alerts:
+            # Sort by timestamp descending, take the newest closed alert
+            closed_alerts.sort(key=lambda a: a.timestamp, reverse=True)
+            last_maint_date = closed_alerts[0].timestamp.strftime("%Y-%m-%d")
+        else:
+            last_maint_date = "N/A"
+        
         kpi_data = {
+            "Status": f"🟢 {machine.status.value}" if machine.status == MachineStatus.NORMAL else (
+                      f"🟡 {machine.status.value}" if machine.status == MachineStatus.WARNING else
+                      f"🔴 {machine.status.value}"),
             "Health Score": f"{machine.health_score}%",
             "Failure Probability": f"{machine.failure_probability*100:.2f}%",
-            "MTBF": f"{analytics_data.mtbf_hours}h",
-            "MTTR": f"{analytics_data.mttr_hours}h",
-            "Availability": f"{analytics_data.availability_percent}%",
-            "Utilization": f"{analytics_data.utilization_percent}%",
-            "Prediction Accuracy": f"{analytics_data.prediction_accuracy}%",
-            "Last Maintenance": machine.last_maintenance_date.strftime("%Y-%m-%d") if machine.last_maintenance_date else "N/A",
+            "Last Maintenance": last_maint_date,
             "Next Maintenance": machine.next_maintenance_date.strftime("%Y-%m-%d") if machine.next_maintenance_date else "N/A"
         }
         
@@ -912,32 +978,208 @@ def render_work_orders_tab(machine: MachineInfo):
     col2.metric("In Progress", summary.get("In Progress", 0))
 
 
+def _generate_maintenance_history(machine: MachineInfo) -> List[Dict[str, str]]:
+    """Generate a logically consistent maintenance history for a machine.
+    
+    Requirements:
+    1. First row = Current machine condition (today's date, Status = Open)
+    2. Newest Closed record's date MUST match Last Maintenance KPI
+    3. All dates sorted newest → oldest
+    4. Only today's row has Status = Open
+    5. Cause/Action pairs are matching and machine-type-specific
+    6. No dates before purchase_date
+    7. Realistic maintenance lifecycle timeline
+    
+    Timeline:
+      Purchase Date
+      ↓
+      First Maintenance (Closed)
+      ↓
+      Second Maintenance (Closed)  
+      ↓
+      Third Maintenance (Closed)
+      ↓
+      Latest Completed Maintenance (Closed) = Last Maintenance
+      ↓
+      Current Condition (Today, Open)
+    
+    Date order (descending):
+      Today (Open)
+      ↓
+      Latest Closed Maintenance
+      ↓
+      Previous Maintenance
+      ↓
+      Older Maintenance
+      ↓
+      First Maintenance
+    """
+    from datetime import timedelta
+    
+    today = datetime.now()
+    
+    # Determine anchor date (purchase_date or installation_date)
+    anchor_date = machine.purchase_date or machine.installation_date
+    if not anchor_date:
+        anchor_date = today - timedelta(days=365 * 3)  # Default: 3 years ago
+    
+    # Ensure anchor_date is not in the future
+    if anchor_date > today:
+        anchor_date = today - timedelta(days=365 * 3)
+    
+    # Get the authoritative last maintenance date from the machine
+    last_maint = machine.last_maintenance_date
+    
+    # Calculate months since purchase for history depth
+    months_since_purchase = max(1, int((today - anchor_date).days / 30))
+    
+    # Generate 2-4 completed maintenance records (not counting today's Open record)
+    num_completed = min(4, max(2, months_since_purchase // 6))
+    
+    # Get machine-type-specific failure causes and actions
+    machine_causes = list(FAILURE_CAUSE_LIBRARY.get(machine.machine_type, []))
+    if not machine_causes:
+        # Fallback generic causes
+        machine_causes = ["Performance drift", "Component wear", "System degradation", "Sensor anomaly"]
+    
+    records = []
+    
+    # === Generate completed (Closed) maintenance records ===
+    if last_maint and last_maint <= today:
+        # Use actual last_maintenance_date for the newest closed record
+        completed_dates = [last_maint]
+        
+        # Generate additional closed records between anchor_date and last_maint
+        available_span = (last_maint - anchor_date).days
+        if available_span > 60 and num_completed > 1:
+            # Distribute additional records across the span
+            for i in range(num_completed - 1):
+                # Spread dates from after anchor_date to before last_maint
+                ratio = (i + 1) / num_completed
+                offset_days = int(available_span * ratio * 0.85)  # Leave gap after each
+                if offset_days < 30:
+                    offset_days = 30 * (i + 1)
+                rec_date = anchor_date + timedelta(days=offset_days)
+                # Add randomness
+                rec_date += timedelta(days=random.randint(-5, 5))
+                # Clamp
+                if rec_date < anchor_date + timedelta(days=30):
+                    rec_date = anchor_date + timedelta(days=30 * (i + 1))
+                if rec_date >= last_maint - timedelta(days=1):
+                    rec_date = last_maint - timedelta(days=random.randint(30, 90))
+                completed_dates.append(rec_date)
+        elif num_completed > 1:
+            # Not much span, generate dates evenly
+            for i in range(num_completed - 1):
+                days_back = random.randint(90 * (i + 1), 180 * (i + 1))
+                rec_date = last_maint - timedelta(days=days_back)
+                if rec_date < anchor_date:
+                    rec_date = anchor_date + timedelta(days=30 * (i + 1))
+                completed_dates.append(rec_date)
+    else:
+        # No last maintenance date - generate all completed records from anchor
+        total_days = max(365, (today - anchor_date).days)
+        completed_dates = []
+        for i in range(num_completed):
+            # Spread evenly with randomness
+            ratio = (i + 1) / (num_completed + 1)
+            offset_days = int(total_days * ratio) + random.randint(-15, 15)
+            offset_days = max(30, min(total_days - 1, offset_days))
+            rec_date = anchor_date + timedelta(days=offset_days)
+            if rec_date >= today:
+                rec_date = today - timedelta(days=random.randint(30, 90))
+            completed_dates.append(rec_date)
+        
+        # Ensure the most recent completed date would be the "last maintenance"
+        if completed_dates:
+            completed_dates.sort(reverse=True)
+    
+    # Ensure no duplicate or out-of-order dates
+    # Allow dates equal to today (last maintenance can be today) - they become Closed records
+    completed_dates = sorted(set(d for d in completed_dates if d <= today), reverse=True)
+    
+    # Limit to num_completed
+    completed_dates = completed_dates[:num_completed]
+    
+    # Assign cause/action pairs to each completed record
+    used_causes = []
+    for i, rec_date in enumerate(completed_dates):
+        # Pick a cause - avoid repeating recently used ones
+        available = [c for c in machine_causes if c not in used_causes]
+        if not available:
+            available = machine_causes
+        cause = random.choice(available)
+        used_causes.append(cause)
+        
+        # Get matching action from library, or generate generic one
+        action = MAINTENANCE_ACTION_LIBRARY.get(cause, "Routine maintenance completed")
+        
+        # Determine condition based on position in lifecycle
+        if i == len(completed_dates) - 1:
+            # Oldest record - likely NORMAL or early WARNING
+            condition = random.choice(["NORMAL", "WARNING"])
+        elif i == 0:
+            # Newest closed - most recent completed maintenance
+            condition = "WARNING"
+        else:
+            condition = random.choice(["WARNING", "CRITICAL"])
+        
+        records.append({
+            "Date": rec_date.strftime("%Y-%m-%d"),
+            "Condition": condition,
+            "Cause": cause,
+            "Prevention / Action": action,
+            "Status": "Closed"
+        })
+    
+    # === Add current condition record (today, Status = Open) ===
+    current_status = machine.status.value  # NORMAL, WARNING, or CRITICAL
+    
+    # Build cause/action for current condition based on machine's actual cause
+    current_cause = machine.cause or ""
+    
+    # If machine has no cause or it's generic, use machine type's cause library
+    if not current_cause or current_cause.lower().startswith("sensor readings"):
+        available_causes = [c for c in machine_causes if c not in used_causes]
+        if not available_causes:
+            available_causes = machine_causes
+        current_cause = random.choice(available_causes)
+    
+    current_action = MAINTENANCE_ACTION_LIBRARY.get(current_cause, "Scheduled maintenance performed")
+    
+    records.append({
+        "Date": today.strftime("%Y-%m-%d"),
+        "Condition": current_status,
+        "Cause": current_cause,
+        "Prevention / Action": current_action,
+        "Status": "Open"
+    })
+    
+    # Sort: Open record (today) always first, then Closed records sorted newest → oldest
+    open_records = [r for r in records if r["Status"] == "Open"]
+    closed_records = [r for r in records if r["Status"] == "Closed"]
+    closed_records.sort(key=lambda r: r["Date"], reverse=True)
+    
+    return open_records + closed_records
+
+
 def render_maintenance_logs_tab(machine: MachineInfo):
     """Render maintenance logs for a machine."""
     st.markdown("### 📜 Maintenance History")
     
-    logs = data_store.maintenance_log_service.get_logs_by_machine(machine.machine_id)
+    # Generate logically consistent maintenance history
+    history = _generate_maintenance_history(machine)
     
-    if not logs:
+    if not history:
         st.info("No maintenance logs for this machine.")
     else:
-        log_data = []
-        for log in logs:
-            log_data.append({
-                "Date": log.maintenance_date.strftime("%Y-%m-%d %H:%M"),
-                "Type": log.maintenance_type.value,
-                "Technician": log.technician,
-                "Issue": log.issue[:50] + "..." if len(log.issue) > 50 else log.issue,
-                "Cost": f"₹{log.cost:,.2f}",
-                "Duration": f"{log.duration_hours}h"
-            })
-        df = pd.DataFrame(log_data)
+        df = pd.DataFrame(history)
         st.dataframe(df, use_container_width=True, hide_index=True)
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Events", len(logs))
-        col2.metric("Total Cost", f"₹{sum(log.cost for log in logs):,.2f}")
-        col3.metric("Total Hours", f"{sum(log.duration_hours for log in logs):.1f}h")
+        col1.metric("Total Events", len(history))
+        col2.metric("Total Cost", "—")
+        col3.metric("Total Hours", "—")
     
     # Add maintenance log form
     st.markdown("---")
@@ -1039,16 +1281,66 @@ def render_machine_alerts_tab(machine: MachineInfo):
             </div>
             """, unsafe_allow_html=True)
 
+    def _alert_reason_to_cause(reason: str) -> str:
+        """Derive a meaningful root cause from the alert reason.
+        Reason = WHAT happened. Cause = WHY it happened.
+        """
+        r = reason.lower()
+        if "bearing" in r:
+            return "Worn bearing race"
+        if "refrigerant" in r:
+            return "Refrigerant leakage"
+        if "condenser" in r or "overheating" in r:
+            return "Dust accumulation on coils"
+        if "evaporator" in r or "icing" in r:
+            return "Restricted airflow"
+        if "motor" in r:
+            return "Bearing wear"
+        if "compressor" in r:
+            return "Dirty condenser coil"
+        if "fan" in r:
+            return "Failed fan bearing"
+        if "door" in r or "seal" in r:
+            return "Damaged door gasket"
+        if "cooling" in r:
+            return "Low refrigerant charge"
+        if "drum" in r or "vibration" in r:
+            return "Unbalanced drum assembly"
+        if "pump" in r or "water" in r:
+            return "Pump impeller wear"
+        if "alternator" in r:
+            return "Failed alternator diode"
+        if "fuel" in r:
+            return "Clogged fuel filter"
+        if "voltage" in r or "electrical" in r:
+            return "Loose electrical connection"
+        if "oil" in r:
+            return "Oil leak from gasket"
+        if "coolant" in r:
+            return "Radiator blockage"
+        if "timing" in r or "belt" in r:
+            return "Belt material fatigue"
+        if "spark" in r or "ignition" in r:
+            return "Spark plug electrode wear"
+        if "rpm" in r or "speed" in r:
+            return "Sensor calibration drift"
+        if "overload" in r or "current" in r or "load" in r:
+            return "Excessive load condition"
+        if "performance" in r or "drift" in r:
+            return "Component degradation over time"
+        return "Component degradation over time"
+
     # Show historical alerts section
     st.markdown("### 📜 Alert History")
     alert_rows = []
     for alert in sorted(alerts, key=lambda a: a.timestamp, reverse=True):
+        cause = _alert_reason_to_cause(alert.reason)
         alert_rows.append({
             "Time": alert.timestamp.strftime("%Y-%m-%d %H:%M"),
             "Severity": alert.severity.value,
             "Reason": alert.reason,
-            "Status": alert.status,
-            "Recommended Action": alert.recommended_action
+            "Cause": cause,
+            "Status": alert.status
         })
 
     df = pd.DataFrame(alert_rows)
@@ -1250,40 +1542,25 @@ def render_analytics():
         fig.update_layout(height=360, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        high_risk = sorted(all_machines, key=lambda m: (m.failure_probability, 100 - m.health_score), reverse=True)[:10]
-        for m in high_risk:
-            col_m1, col_m2, col_m3 = st.columns([2, 2, 1])
-            with col_m1:
-                st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span> - <span style='color:#666;'>{m.name}</span>", unsafe_allow_html=True)
-            with col_m2:
-                st.markdown(f"<span style='color:#666;'>{m.machine_category} | Health: {m.health_score:.1f}% | Failure: {m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
-            with col_m3:
-                if st.button("View", key=f"analytics_view_{m.machine_id}", use_container_width=True):
-                    navigate_to_machine(m.machine_id)
-                    st.rerun()
+    forecast_buckets = {"Overdue": 0, "Next 7 Days": 0, "8-30 Days": 0, "31+ Days": 0, "Not Scheduled": 0}
+    for machine in all_machines:
+        if not machine.next_maintenance_date:
+            forecast_buckets["Not Scheduled"] += 1
+            continue
+        days_to_maintenance = (machine.next_maintenance_date - today).days
+        if days_to_maintenance < 0:
+            forecast_buckets["Overdue"] += 1
+        elif days_to_maintenance <= 7:
+            forecast_buckets["Next 7 Days"] += 1
+        elif days_to_maintenance <= 30:
+            forecast_buckets["8-30 Days"] += 1
+        else:
+            forecast_buckets["31+ Days"] += 1
 
-    with col2:
-        forecast_buckets = {"Overdue": 0, "Next 7 Days": 0, "8-30 Days": 0, "31+ Days": 0, "Not Scheduled": 0}
-        for machine in all_machines:
-            if not machine.next_maintenance_date:
-                forecast_buckets["Not Scheduled"] += 1
-                continue
-            days_to_maintenance = (machine.next_maintenance_date - today).days
-            if days_to_maintenance < 0:
-                forecast_buckets["Overdue"] += 1
-            elif days_to_maintenance <= 7:
-                forecast_buckets["Next 7 Days"] += 1
-            elif days_to_maintenance <= 30:
-                forecast_buckets["8-30 Days"] += 1
-            else:
-                forecast_buckets["31+ Days"] += 1
-
-        forecast_df = pd.DataFrame([{"Window": window, "Machines": count} for window, count in forecast_buckets.items()])
-        fig = px.bar(forecast_df, x="Window", y="Machines", title="Maintenance Forecast", color="Window")
-        fig.update_layout(height=430, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+    forecast_df = pd.DataFrame([{"Window": window, "Machines": count} for window, count in forecast_buckets.items()])
+    fig = px.bar(forecast_df, x="Window", y="Machines", title="Maintenance Forecast", color="Window")
+    fig.update_layout(height=430, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1367,16 +1644,34 @@ def render_analytics():
     st.markdown("---")
     st.subheader("Top 10 High-Risk Machines")
     high_risk = sorted(all_machines, key=lambda m: (m.failure_probability, 100 - m.health_score), reverse=True)[:10]
+    risk_rows = []
     for m in high_risk:
-        col_a, col_b, col_c = st.columns([1.5, 4, 1])
-        with col_a:
-            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
-        with col_b:
-            st.markdown(f"<span style='color:#666;'>{m.name} | {m.machine_category} | Health: {m.health_score:.1f}% | Failure Prob: {m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
-        with col_c:
-            if st.button("View", key=f"analytics_risk_view_{m.machine_id}", use_container_width=True):
-                navigate_to_machine(m.machine_id)
-                st.rerun()
+        risk_rows.append({
+            "Machine ID": m.machine_id,
+            "Category": m.machine_category,
+            "Health Score": f"{m.health_score:.1f}%",
+            "Failure Probability": f"{m.failure_probability*100:.1f}%",
+            "Condition": m.status.value
+        })
+    if risk_rows:
+        df_risk = pd.DataFrame(risk_rows)
+        df_risk["Machine ID"] = df_risk["Machine ID"].apply(
+            lambda mid: f"?navigate={mid}"
+        )
+        st.dataframe(
+            df_risk,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
+                    help="Click to view machine maintenance history",
+                    display_text=r"\?navigate=(.*)"),
+                "Category": st.column_config.Column("Category", width="medium"),
+                "Health Score": st.column_config.Column("Health Score", width="small"),
+                "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
+                "Condition": st.column_config.Column("Condition", width="small"),
+            }
+        )
 
 
 # ==================== ALERTS PAGE ====================
@@ -1415,25 +1710,38 @@ def render_alerts():
         st.success("✅ No active alerts. All systems normal.")
     else:
         st.caption(f"Showing {len(alerts)} active alert(s)")
+        alert_rows = []
         for a in alerts:
             machine = simulator.get_machine(a.machine_id)
-            severity_color = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}.get(a.severity.value, "#888")
-            col_a, col_b, col_c, col_d, col_e, col_f = st.columns([1.2, 1.2, 1.5, 2.5, 1, 1])
-            with col_a:
-                st.markdown(f"<span style='color:#aaa;font-size:0.8rem;'>{a.alert_id[:12]}</span>", unsafe_allow_html=True)
-            with col_b:
-                st.markdown(f"<span style='color:{severity_color};font-weight:bold;'>{a.severity.value}</span>", unsafe_allow_html=True)
-            with col_c:
-                machine_name = machine.name if machine else "N/A"
-                st.markdown(f"<span style='color:#ccc;'>{machine_name}</span>", unsafe_allow_html=True)
-            with col_d:
-                st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{a.reason[:60]}</span>", unsafe_allow_html=True)
-            with col_e:
-                st.markdown(f"<span style='color:#888;font-size:0.8rem;'>{a.timestamp.strftime('%Y-%m-%d %H:%M')}</span>", unsafe_allow_html=True)
-            with col_f:
-                if st.button(f"🔍 {a.machine_id}", key=f"alert_{a.alert_id}", use_container_width=True):
-                    navigate_to_machine(a.machine_id)
-                    st.rerun()
+            machine_name = machine.name if machine else "N/A"
+            alert_rows.append({
+                "Machine ID": a.machine_id,
+                "Alert ID": a.alert_id[:12],
+                "Description": a.reason[:60],
+                "Date": a.timestamp.strftime('%Y-%m-%d %H:%M'),
+                "Condition": a.severity.value,
+                "Status": a.status
+            })
+        if alert_rows:
+            df_alert_page = pd.DataFrame(alert_rows)
+            df_alert_page["Machine ID"] = df_alert_page["Machine ID"].apply(
+                lambda mid: f"?navigate={mid}"
+            )
+            st.dataframe(
+                df_alert_page,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
+                        help="Click to view machine maintenance history",
+                        display_text=r"\?navigate=(.*)"),
+                    "Alert ID": st.column_config.Column("Alert ID", width="small"),
+                    "Description": st.column_config.Column("Description", width="large"),
+                    "Date": st.column_config.Column("Date", width="medium"),
+                    "Condition": st.column_config.Column("Condition", width="small"),
+                    "Status": st.column_config.Column("Status", width="small"),
+                }
+            )
 
 
 # ==================== WORK ORDERS PAGE ====================
@@ -1468,26 +1776,36 @@ def render_work_orders():
         st.success("✅ No active work orders. All machines are operating normally.")
     else:
         st.caption(f"Showing {len(work_orders)} active work order(s)")
+        wo_rows = []
         for wo in work_orders:
-            col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 2, 1.2, 1, 0.8, 1, 0.8])
-            with col_a:
-                st.markdown(f"<span style='color:#aaa;font-size:0.8rem;'>{wo.work_order_id[:12]}</span>", unsafe_allow_html=True)
-            with col_b:
-                st.markdown(f"<span style='color:#ccc;'>{wo.title[:40]}</span>", unsafe_allow_html=True)
-            with col_c:
-                st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{wo.machine_id}</span>", unsafe_allow_html=True)
-            with col_d:
-                status_colors = {"Open": "#FF4444", "In Progress": "#FFAA00", "Completed": "#44CC44", "Cancelled": "#888"}
-                wo_color = status_colors.get(wo.status.value, "#888")
-                st.markdown(f"<span style='color:{wo_color};'>{wo.status.value}</span>", unsafe_allow_html=True)
-            with col_e:
-                st.markdown(f"<span style='color:#ddd;'>{wo.priority}</span>", unsafe_allow_html=True)
-            with col_f:
-                st.markdown(f"<span style='color:#888;font-size:0.8rem;'>{wo.assigned_technician}</span>", unsafe_allow_html=True)
-            with col_g:
-                if st.button("🔍", key=f"wo_view_{wo.work_order_id}", use_container_width=True):
-                    navigate_to_machine(wo.machine_id)
-                    st.rerun()
+            wo_rows.append({
+                "Machine ID": wo.machine_id,
+                "Work Order ID": wo.work_order_id[:12],
+                "Created Date": wo.created_date.strftime('%Y-%m-%d'),
+                "Priority": wo.priority,
+                "Technician": wo.assigned_technician,
+                "Status": wo.status.value
+            })
+        if wo_rows:
+            df_wo = pd.DataFrame(wo_rows)
+            df_wo["Machine ID"] = df_wo["Machine ID"].apply(
+                lambda mid: f"?navigate={mid}"
+            )
+            st.dataframe(
+                df_wo,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
+                        help="Click to view machine maintenance history",
+                        display_text=r"\?navigate=(.*)"),
+                    "Work Order ID": st.column_config.Column("Work Order ID", width="small"),
+                    "Created Date": st.column_config.Column("Created Date", width="medium"),
+                    "Priority": st.column_config.Column("Priority", width="small"),
+                    "Technician": st.column_config.Column("Technician", width="medium"),
+                    "Status": st.column_config.Column("Status", width="small"),
+                }
+            )
 
 
 # ==================== REPORTS PAGE ====================
@@ -2229,16 +2547,250 @@ def render_maintenance_logs():
             )
 
 
+# ==================== KPI DESTINATION PAGES ====================
+
+def render_kpi_categories():
+    """Render the Machines Categories page from the Categories KPI card."""
+    st.markdown("<h1 class='main-header'>Machine Categories</h1>", unsafe_allow_html=True)
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    st.markdown("---")
+    render_machine_category_cards()
+
+
+def render_kpi_all_machines():
+    """Render All Machines page from the Total Machines KPI card."""
+    st.markdown("<h1 class='main-header'>All Machines</h1>", unsafe_allow_html=True)
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    st.markdown("---")
+    
+    all_machines = simulator.get_all_machines()
+    st.markdown(f"**Total Machines: {len(all_machines)}**")
+    
+    for m in sorted(all_machines, key=lambda x: x.health_score):
+        status_color = STATUS_COLORS.get(m.status.value, "#888")
+        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
+        with col_a:
+            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
+        with col_b:
+            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
+        with col_c:
+            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
+        with col_d:
+            st.markdown(f"<span style='color:#ddd;'>{m.health_score}%</span>", unsafe_allow_html=True)
+        with col_e:
+            st.markdown(f"<span style='color:#ffaa00;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
+        with col_f:
+            badge_color = STATUS_COLORS.get(m.status.value, "#888")
+            st.markdown(f"<span style='background:{badge_color};color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>{m.status.value}</span>", unsafe_allow_html=True)
+        with col_g:
+            if st.button("View", key=f"kpi_all_machine_{m.machine_id}", use_container_width=True):
+                navigate_to_machine(m.machine_id)
+                st.rerun()
+
+
+def render_kpi_healthy():
+    """Render Healthy Machines page - shows only NORMAL machines."""
+    st.markdown("<h1 class='main-header'>✅ Healthy Machines</h1>", unsafe_allow_html=True)
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    st.markdown("---")
+    
+    all_machines = simulator.get_all_machines()
+    healthy_machines = [m for m in all_machines if m.status == MachineStatus.NORMAL]
+    
+    if not healthy_machines:
+        st.info("No healthy machines found.")
+        return
+    
+    st.markdown(f"**Healthy Machines: {len(healthy_machines)}**")
+    
+    for m in sorted(healthy_machines, key=lambda x: x.health_score, reverse=True):
+        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
+        with col_a:
+            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
+        with col_b:
+            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
+        with col_c:
+            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
+        with col_d:
+            st.markdown(f"<span style='color:#44CC44;'>{m.health_score}%</span>", unsafe_allow_html=True)
+        with col_e:
+            st.markdown(f"<span style='color:#44CC44;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
+        with col_f:
+            st.markdown(f"<span style='background:#44CC44;color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>NORMAL</span>", unsafe_allow_html=True)
+        with col_g:
+            if st.button("View", key=f"kpi_healthy_machine_{m.machine_id}", use_container_width=True):
+                navigate_to_machine(m.machine_id)
+                st.rerun()
+
+
+def render_kpi_warning():
+    """Render Warning Machines page - shows only WARNING machines."""
+    st.markdown("<h1 class='main-header'>⚠️ Warning Machines</h1>", unsafe_allow_html=True)
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    st.markdown("---")
+    
+    all_machines = simulator.get_all_machines()
+    warning_machines = [m for m in all_machines if m.status == MachineStatus.WARNING]
+    
+    if not warning_machines:
+        st.info("No warning machines found.")
+        return
+    
+    st.markdown(f"**Warning Machines: {len(warning_machines)}**")
+    
+    for m in sorted(warning_machines, key=lambda x: x.health_score):
+        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
+        with col_a:
+            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
+        with col_b:
+            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
+        with col_c:
+            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
+        with col_d:
+            st.markdown(f"<span style='color:#FFAA00;'>{m.health_score}%</span>", unsafe_allow_html=True)
+        with col_e:
+            st.markdown(f"<span style='color:#FFAA00;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
+        with col_f:
+            st.markdown(f"<span style='background:#FFAA00;color:black;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>WARNING</span>", unsafe_allow_html=True)
+        with col_g:
+            if st.button("View", key=f"kpi_warning_machine_{m.machine_id}", use_container_width=True):
+                navigate_to_machine(m.machine_id)
+                st.rerun()
+
+
+def render_kpi_critical():
+    """Render Critical Machines page - shows only CRITICAL machines."""
+    st.markdown("<h1 class='main-header'>🔴 Critical Machines</h1>", unsafe_allow_html=True)
+    if st.button("← Back to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+    st.markdown("---")
+    
+    all_machines = simulator.get_all_machines()
+    critical_machines = [m for m in all_machines if m.status == MachineStatus.CRITICAL]
+    
+    if not critical_machines:
+        st.info("No critical machines found.")
+        return
+    
+    st.markdown(f"**Critical Machines: {len(critical_machines)}**")
+    
+    for m in sorted(critical_machines, key=lambda x: x.health_score):
+        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
+        with col_a:
+            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
+        with col_b:
+            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
+        with col_c:
+            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
+        with col_d:
+            st.markdown(f"<span style='color:#FF4444;'>{m.health_score}%</span>", unsafe_allow_html=True)
+        with col_e:
+            st.markdown(f"<span style='color:#FF4444;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
+        with col_f:
+            st.markdown(f"<span style='background:#FF4444;color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>CRITICAL</span>", unsafe_allow_html=True)
+        with col_g:
+            if st.button("View", key=f"kpi_critical_machine_{m.machine_id}", use_container_width=True):
+                navigate_to_machine(m.machine_id)
+                st.rerun()
+
+
+# ==================== PRE-ROUTING HOOK ====================
+
+def pre_route():
+    """Run BEFORE the main app router to intercept hyperlink navigation.
+    
+    Handles Dashboard KPI card clicks (?kpi_* params).
+    
+    This hook ensures the correct page is set BEFORE the router
+    decides which page to render — preventing accidental routing to the wrong module."""
+    query_params = st.query_params
+    
+    # Handle Dashboard KPI card clicks - each goes to its own dedicated page
+    if query_params.get("kpi_categories"):
+        st.session_state.page = "kpi_categories"
+        st.session_state.selected_factory = None
+        st.session_state.selected_machine = None
+        st.session_state.kpi_filter = None
+        query_params.clear()
+        return
+    
+    if query_params.get("kpi_machines"):
+        st.session_state.page = "kpi_machines"
+        st.session_state.selected_factory = None
+        st.session_state.selected_machine = None
+        st.session_state.kpi_filter = "all"
+        query_params.clear()
+        return
+    
+    if query_params.get("kpi_healthy"):
+        st.session_state.page = "kpi_healthy"
+        st.session_state.selected_factory = None
+        st.session_state.selected_machine = None
+        st.session_state.kpi_filter = "healthy"
+        query_params.clear()
+        return
+    
+    if query_params.get("kpi_warning"):
+        st.session_state.page = "kpi_warning"
+        st.session_state.selected_factory = None
+        st.session_state.selected_machine = None
+        st.session_state.kpi_filter = "warning"
+        query_params.clear()
+        return
+    
+    if query_params.get("kpi_critical"):
+        st.session_state.page = "kpi_critical"
+        st.session_state.selected_factory = None
+        st.session_state.selected_machine = None
+        st.session_state.kpi_filter = "critical"
+        query_params.clear()
+        return
+    
+    if query_params.get("kpi_analytics"):
+        st.session_state.page = "analytics"
+        st.session_state.kpi_filter = None
+        query_params.clear()
+        return
+    
+    # Handle Machine ID click navigation from LinkColumn tables
+    navigate_machine = query_params.get("navigate")
+    if navigate_machine:
+        st.session_state.page = "machines"
+        st.session_state.selected_machine = navigate_machine
+        query_params.clear()
+        return
+
+
 # ==================== MAIN APP ====================
 
 def main():
     """Main app router."""
+    pre_route()
     render_sidebar()
     
     page = st.session_state.page
     
     if page == "dashboard":
         render_dashboard()
+    elif page == "kpi_categories":
+        render_kpi_categories()
+    elif page == "kpi_machines":
+        render_kpi_all_machines()
+    elif page == "kpi_healthy":
+        render_kpi_healthy()
+    elif page == "kpi_warning":
+        render_kpi_warning()
+    elif page == "kpi_critical":
+        render_kpi_critical()
     elif page == "machines":
         render_machines()
     elif page == "analytics":

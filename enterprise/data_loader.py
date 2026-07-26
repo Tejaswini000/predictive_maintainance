@@ -7,11 +7,18 @@ and creates MachineInfo objects. Replaces the old random generation logic.
 
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime, date
 import traceback
 
 import pandas as pd
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_DIR.parent
+for path in (str(PACKAGE_DIR), str(PROJECT_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from models import (
     MachineInfo, MachineType, MachineStatus, SensorType,
@@ -309,7 +316,9 @@ def load_machines_from_excel(filepath: str = MACHINES_XLSX_PATH) -> List[Machine
             machines.append(machine)
             
         except Exception as e:
-            print(f"Warning: Could not parse row {idx+2} (Machine ID: {machine_id}): {e}")
+            import logging
+            logging.getLogger(__name__).warning("Could not parse row %d (Machine ID: %s): %s", idx+2, machine_id, e)
+            continue
             continue
     
     if not machines:
@@ -331,12 +340,15 @@ def get_machine_data() -> List[MachineInfo]:
     try:
         return load_machines_from_excel()
     except FileNotFoundError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        import logging
+        logging.getLogger(__name__).error("%s", e)
         return []
     except ValueError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        import logging
+        logging.getLogger(__name__).error("%s", e)
         return []
     except Exception as e:
-        print(f"ERROR: Unexpected error loading machine data: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        import logging, traceback
+        logging.getLogger(__name__).exception("Unexpected error loading machine data: %s", e)
+        traceback.print_exc()
         return []
