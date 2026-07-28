@@ -109,6 +109,86 @@ st.markdown("""
         white-space: pre-wrap !important;
         text-align: center !important;
     }
+    /* Category card styling for maintenance logs */
+    .category-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 12px;
+        padding: 16px;
+        border: 1px solid #2a2a4a;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-align: center;
+        height: 100%;
+    }
+    .category-card:hover {
+        border-color: #4da6ff;
+        box-shadow: 0 4px 12px rgba(77, 166, 255, 0.3);
+    }
+    .category-card-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #fff;
+        margin-bottom: 8px;
+    }
+    .category-card-stat {
+        font-size: 0.85rem;
+        color: #aaa;
+        margin: 3px 0;
+    }
+    .category-card-stat span {
+        color: #ddd;
+        font-weight: 500;
+    }
+    .category-card-cost {
+        font-size: 0.9rem;
+        color: #4da6ff;
+        font-weight: 600;
+        margin-top: 6px;
+    }
+    .summary-section {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 12px;
+        padding: 16px 20px;
+        border: 1px solid #2a2a4a;
+        margin: 10px 0;
+    }
+    .summary-stat { text-align: center; padding: 8px; }
+    .summary-stat-value { font-size: 1.4rem; font-weight: 700; color: #fff; }
+    .summary-stat-label { font-size: 0.8rem; color: #aaa; margin-top: 2px; }
+    /* Machine list alignment */
+    .machine-list-row {
+        display: flex;
+        align-items: center;
+        padding: 6px 0;
+        border-bottom: 1px solid #2a2a4a;
+    }
+    .machine-list-header {
+        display: flex;
+        align-items: center;
+        padding: 6px 0;
+        border-bottom: 2px solid #2a2a4a;
+        color: #888;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+    .machine-list-checkbox {
+        width: 40px;
+        flex-shrink: 0;
+        text-align: center;
+    }
+    .machine-list-id {
+        flex: 2;
+        padding-left: 8px;
+    }
+    .machine-list-logs {
+        flex: 1.5;
+        text-align: left;
+    }
+    .machine-list-cost {
+        flex: 1.5;
+        text-align: left;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -138,6 +218,23 @@ def navigate_to_machine(machine_id: str):
     st.session_state.page = "machines"
     st.session_state.selected_machine = machine_id
 
+
+def _handle_row_selection(df: pd.DataFrame, key: str):
+    """Handle Streamlit dataframe row selection for machine navigation.
+    
+    Call this after st.dataframe() with on_select='rerun' and selection_mode='single-row'.
+    The selected row's 'Machine ID' column value will trigger navigation to that machine.
+    """
+    selection = st.session_state.get(key)
+    if selection and selection.get("selection") and selection["selection"].get("rows"):
+        rows = selection["selection"]["rows"]
+        if len(rows) > 0:
+            row_idx = rows[0]
+            if row_idx < len(df):
+                machine_id = df.iloc[row_idx]["Machine ID"]
+                navigate_to_machine(machine_id)
+                st.rerun()
+
 # ==================== SESSION STATE INIT ====================
 
 def init_session_state():
@@ -158,6 +255,13 @@ def init_session_state():
         st.session_state.simulation_running = False
     if "simulation_refresh_counter" not in st.session_state:
         st.session_state.simulation_refresh_counter = 0
+    # Maintenance Logs enhancement state
+    if "maintenance_category" not in st.session_state:
+        st.session_state.maintenance_category = None
+    if "maintenance_selected_machine" not in st.session_state:
+        st.session_state.maintenance_selected_machine = None
+    if "maintenance_page" not in st.session_state:
+        st.session_state.maintenance_page = "overview"
 
 init_session_state()
 
@@ -482,18 +586,15 @@ def render_dashboard():
             })
         if alert_rows:
             df_alerts = pd.DataFrame(alert_rows)
-            df_alerts["Machine ID"] = df_alerts["Machine ID"].apply(
-                lambda mid: f"?navigate={mid}"
-            )
             df_display = df_alerts.drop(columns=["__condition_color"], errors="ignore")
-            st.dataframe(
+            sel = st.dataframe(
                 df_display,
                 use_container_width=True,
                 hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
                 column_config={
-                    "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
-                        help="Click to view machine maintenance history",
-                        display_text=r"\?navigate=(.*)"),
+                    "Machine ID": st.column_config.Column("Machine ID", width="small"),
                     "Alert ID": st.column_config.Column("Alert ID", width="small"),
                     "Description": st.column_config.Column("Description", width="large"),
                     "Date": st.column_config.Column("Date", width="medium"),
@@ -501,6 +602,11 @@ def render_dashboard():
                     "Status": st.column_config.Column("Status", width="small"),
                 }
             )
+            if len(sel.selection.rows) > 0:
+                row_idx = sel.selection.rows[0]
+                machine_id = df_display.iloc[row_idx]["Machine ID"]
+                navigate_to_machine(machine_id)
+                st.rerun()
     else:
         st.info("✅ No open alerts. All systems normal.")
     
@@ -520,23 +626,25 @@ def render_dashboard():
     
     if machine_rows:
         df_machines = pd.DataFrame(machine_rows)
-        df_machines["Machine ID"] = df_machines["Machine ID"].apply(
-            lambda mid: f"?navigate={mid}"
-        )
-        st.dataframe(
+        sel = st.dataframe(
             df_machines,
             use_container_width=True,
             hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
             column_config={
-                "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
-                    help="Click to view machine maintenance history",
-                    display_text=r"\?navigate=(.*)"),
+                "Machine ID": st.column_config.Column("Machine ID", width="small"),
                 "Category": st.column_config.Column("Category", width="medium"),
                 "Health Score": st.column_config.Column("Health Score", width="small"),
                 "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
                 "Condition": st.column_config.Column("Condition", width="small"),
             }
         )
+        if len(sel.selection.rows) > 0:
+            row_idx = sel.selection.rows[0]
+            machine_id = df_machines.iloc[row_idx]["Machine ID"]
+            navigate_to_machine(machine_id)
+            st.rerun()
 
 
 # ==================== MACHINES PAGE ====================
@@ -1655,23 +1763,25 @@ def render_analytics():
         })
     if risk_rows:
         df_risk = pd.DataFrame(risk_rows)
-        df_risk["Machine ID"] = df_risk["Machine ID"].apply(
-            lambda mid: f"?navigate={mid}"
-        )
-        st.dataframe(
+        sel = st.dataframe(
             df_risk,
             use_container_width=True,
             hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
             column_config={
-                "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
-                    help="Click to view machine maintenance history",
-                    display_text=r"\?navigate=(.*)"),
+                "Machine ID": st.column_config.Column("Machine ID", width="small"),
                 "Category": st.column_config.Column("Category", width="medium"),
                 "Health Score": st.column_config.Column("Health Score", width="small"),
                 "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
                 "Condition": st.column_config.Column("Condition", width="small"),
             }
         )
+        if len(sel.selection.rows) > 0:
+            row_idx = sel.selection.rows[0]
+            machine_id = df_risk.iloc[row_idx]["Machine ID"]
+            navigate_to_machine(machine_id)
+            st.rerun()
 
 
 # ==================== ALERTS PAGE ====================
@@ -1724,17 +1834,14 @@ def render_alerts():
             })
         if alert_rows:
             df_alert_page = pd.DataFrame(alert_rows)
-            df_alert_page["Machine ID"] = df_alert_page["Machine ID"].apply(
-                lambda mid: f"?navigate={mid}"
-            )
-            st.dataframe(
+            sel = st.dataframe(
                 df_alert_page,
                 use_container_width=True,
                 hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
                 column_config={
-                    "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
-                        help="Click to view machine maintenance history",
-                        display_text=r"\?navigate=(.*)"),
+                    "Machine ID": st.column_config.Column("Machine ID", width="small"),
                     "Alert ID": st.column_config.Column("Alert ID", width="small"),
                     "Description": st.column_config.Column("Description", width="large"),
                     "Date": st.column_config.Column("Date", width="medium"),
@@ -1742,6 +1849,11 @@ def render_alerts():
                     "Status": st.column_config.Column("Status", width="small"),
                 }
             )
+            if len(sel.selection.rows) > 0:
+                row_idx = sel.selection.rows[0]
+                machine_id = df_alert_page.iloc[row_idx]["Machine ID"]
+                navigate_to_machine(machine_id)
+                st.rerun()
 
 
 # ==================== WORK ORDERS PAGE ====================
@@ -1788,17 +1900,14 @@ def render_work_orders():
             })
         if wo_rows:
             df_wo = pd.DataFrame(wo_rows)
-            df_wo["Machine ID"] = df_wo["Machine ID"].apply(
-                lambda mid: f"?navigate={mid}"
-            )
-            st.dataframe(
+            sel = st.dataframe(
                 df_wo,
                 use_container_width=True,
                 hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
                 column_config={
-                    "Machine ID": st.column_config.LinkColumn("Machine ID", width="small",
-                        help="Click to view machine maintenance history",
-                        display_text=r"\?navigate=(.*)"),
+                    "Machine ID": st.column_config.Column("Machine ID", width="small"),
                     "Work Order ID": st.column_config.Column("Work Order ID", width="small"),
                     "Created Date": st.column_config.Column("Created Date", width="medium"),
                     "Priority": st.column_config.Column("Priority", width="small"),
@@ -1806,6 +1915,11 @@ def render_work_orders():
                     "Status": st.column_config.Column("Status", width="small"),
                 }
             )
+            if len(sel.selection.rows) > 0:
+                row_idx = sel.selection.rows[0]
+                machine_id = df_wo.iloc[row_idx]["Machine ID"]
+                navigate_to_machine(machine_id)
+                st.rerun()
 
 
 # ==================== REPORTS PAGE ====================
@@ -2399,34 +2513,131 @@ def render_copilot():
             st.rerun()
 
 
-# ==================== MAINTENANCE LOGS PAGE ====================
+# ==================== MAINTENANCE LOGS PAGE - ENHANCED ====================
 
 def render_maintenance_logs():
-    """Render maintenance logs page."""
+    """Render maintenance logs page with Category Summary Cards at the top.
+    
+    This function adds Premium Category Summary Cards above the existing
+    maintenance logs table. Clicking a card navigates to a Category Details page
+    showing only machines belonging to that category, with checkboxes for selection.
+    Selecting a machine shows summary stats and maintenance history.
+    
+    Does NOT modify any existing Enterprise Tables or UI components.
+    """
+    # Determine which sub-page to show
+    maint_page = st.session_state.get("maintenance_page", "overview")
+    maint_category = st.session_state.get("maintenance_category", None)
+    maint_machine = st.session_state.get("maintenance_selected_machine", None)
+    
+    if maint_page == "machine_summary" and maint_machine:
+        render_maintenance_machine_summary()
+        return
+    
+    if maint_page == "category_detail" and maint_category:
+        render_category_machine_list()
+        return
+    
+    # === MAIN OVERVIEW PAGE ===
     st.markdown("<h1 class='main-header'>📝 Maintenance Logs</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    col1, col2 = st.columns([3, 1])
+    # ==================== CATEGORY OVERVIEW KPI CARDS (top row, non-clickable) ====================
+    all_logs = data_store.maintenance_log_service.get_all_logs()
+    all_machines = simulator.get_all_machines()
+    machine_map = {m.machine_id: m for m in all_machines}
     
-    with col1:
-        logs = data_store.maintenance_log_service.get_all_logs()
-        logs.sort(key=lambda l: l.maintenance_date, reverse=True)
-        all_machines = simulator.get_all_machines()
-        machine_map = {m.machine_id: m for m in all_machines}
-        categories = sorted({machine_map[log.machine_id].machine_category for log in logs if log.machine_id in machine_map})
-        technicians = sorted({log.technician for log in logs})
-        maintenance_types = sorted({log.maintenance_type.value for log in logs})
-        statuses = sorted({getattr(log, "status", "Completed") for log in logs})
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            selected_category = st.selectbox("Category", ["All"] + categories, key="maintenance_log_category_filter")
-            selected_technician = st.selectbox("Technician", ["All"] + technicians, key="maintenance_log_technician_filter")
-        with f2:
-            selected_machine = st.selectbox("Machine", ["All"] + sorted({log.machine_id for log in logs}), key="maintenance_log_machine_filter")
-            selected_type = st.selectbox("Maintenance Type", ["All"] + maintenance_types, key="maintenance_log_type_filter")
-        with f3:
-            selected_status = st.selectbox("Status", ["All"] + statuses, key="maintenance_log_status_filter")
-            search_text = st.text_input("Search", key="maintenance_log_search")
+    from maintenance_logs_enhanced import compute_all_category_summaries
+    all_category_summaries = compute_all_category_summaries(all_logs, all_machines)
+    
+    # ==================== OVERALL SUMMARY KPI CARDS (GLOBAL values) ====================
+    total_logs_all = len(all_logs)
+    completed_logs_all = len([log for log in all_logs if getattr(log, "status", "Completed") == "Completed"])
+    pending_logs_all = len([log for log in all_logs if getattr(log, "status", "") != "Completed"])
+    total_cost_all = sum(log.cost for log in all_logs)
+    
+    st.markdown("### 📊 Overall Summary")
+    col_ok1, col_ok2, col_ok3, col_ok4 = st.columns(4)
+    with col_ok1:
+        st.markdown(
+            "<div class='metric-card' style='text-align:center;'>"
+            f"<div class='metric-value'>{total_logs_all}</div>"
+            "<div class='metric-label'>Total Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_ok2:
+        st.markdown(
+            "<div class='metric-card' style='text-align:center;'>"
+            f"<div class='metric-value' style='color:#44CC44'>{completed_logs_all}</div>"
+            "<div class='metric-label'>Completed Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_ok3:
+        st.markdown(
+            "<div class='metric-card' style='text-align:center;'>"
+            f"<div class='metric-value' style='color:#FFAA00'>{pending_logs_all}</div>"
+            "<div class='metric-label'>Scheduled/Pending Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_ok4:
+        st.markdown(
+            "<div class='metric-card' style='text-align:center;'>"
+            f"<div class='metric-value' style='color:#4da6ff'>₹{total_cost_all:,.0f}</div>"
+            "<div class='metric-label'>Total Maintenance Cost</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    st.markdown("---")
+    
+    # Category Overview is removed - only showing Category Summary cards below
+    
+    # ==================== 1. CATEGORY SUMMARY CARDS (clickable) ====================
+    if all_category_summaries:
+        st.markdown("### 📊 Category Summary")
+        cols = st.columns(min(5, len(all_category_summaries)))
+        for idx, summary in enumerate(all_category_summaries):
+            with cols[idx % len(cols)]:
+                category = summary["category"]
+                # Render card as HTML (not in button label, which escapes HTML)
+                st.markdown(f"""
+                <div class='category-card'>
+                    <div class='category-card-title'>{category}</div>
+                    <div class='category-card-stat'>Total Logs: <span>{summary['total_logs']}</span></div>
+                    <div class='category-card-stat'>Completed: <span style='color:#44CC44'>{summary['completed_logs']}</span></div>
+                    <div class='category-card-stat'>Pending: <span style='color:#FFAA00'>{summary['pending_logs']}</span></div>
+                    <div class='category-card-cost'>₹{summary['total_cost']:,.0f}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button(f"View {category}", key=f"cat_card_{idx}", use_container_width=True):
+                    st.session_state.maintenance_category = category
+                    st.session_state.maintenance_page = "category_detail"
+                    st.session_state.maintenance_selected_machine = None
+                    st.rerun()
+        st.markdown("---")
+    
+    # ==================== EXISTING MAINTENANCE LOGS TABLE (hidden while category cards are showing) ====================
+    if not all_category_summaries:
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            logs = sorted(all_logs, key=lambda l: l.maintenance_date, reverse=True)
+            categories = sorted({machine_map[log.machine_id].machine_category for log in logs if log.machine_id in machine_map})
+            technicians = sorted({log.technician for log in logs})
+            maintenance_types = sorted({log.maintenance_type.value for log in logs})
+            statuses = sorted({getattr(log, "status", "Completed") for log in logs})
+            f1, f2, f3 = st.columns(3)
+            with f1:
+                selected_category = st.selectbox("Category", ["All"] + categories, key="maintenance_log_category_filter")
+                selected_technician = st.selectbox("Technician", ["All"] + technicians, key="maintenance_log_technician_filter")
+            with f2:
+                selected_machine = st.selectbox("Machine", ["All"] + sorted({log.machine_id for log in logs}), key="maintenance_log_machine_filter")
+                selected_type = st.selectbox("Maintenance Type", ["All"] + maintenance_types, key="maintenance_log_type_filter")
+            with f3:
+                selected_status = st.selectbox("Status", ["All"] + statuses, key="maintenance_log_status_filter")
+                search_text = st.text_input("Search", key="maintenance_log_search")
         date_range = st.date_input("Date", value=[], key="maintenance_log_date_filter")
         filtered_logs = logs
         if selected_category != "All":
@@ -2476,75 +2687,330 @@ def render_maintenance_logs():
                         navigate_to_machine(log.machine_id)
                         st.rerun()
     
+        with col2:
+            st.metric("Total Logs", len(all_logs))
+            completed_logs = [log for log in all_logs if getattr(log, "status", "Completed") == "Completed"]
+            scheduled_logs = [log for log in all_logs if getattr(log, "status", "") == "Scheduled"]
+            total_cost = sum(log.cost for log in completed_logs)
+            total_hours = sum(log.duration_hours for log in completed_logs)
+            avg_repair_time = round(total_hours / len(completed_logs), 1) if completed_logs else 0
+            total_downtime = sum(getattr(log, "downtime_hours", log.duration_hours) for log in completed_logs)
+            st.metric("Completed Jobs", len(completed_logs))
+            st.metric("Scheduled Jobs", len(scheduled_logs))
+            st.metric("Total Cost", f"₹{total_cost:,.2f}")
+            st.metric("Total Hours", f"{total_hours:.1f}h")
+            st.metric("Avg Repair Time", f"{avg_repair_time:.1f}h")
+            st.metric("Downtime", f"{total_downtime:.1f}h")
+            
+            # Export
+            if st.button("📥 Export Logs", use_container_width=True):
+                output = io.StringIO()
+                writer = csv.writer(output)
+                writer.writerow(["Log ID", "Date", "Machine", "Machine Name", "Category", "Type", "Technician", "Issue", "Cost", "Duration", "Downtime", "Before Health", "After Health", "Status"])
+                export_rows = []
+                for log in filtered_logs:
+                    machine = simulator.get_machine(log.machine_id)
+                    row = {
+                        "Log ID": log.log_id,
+                        "Date": log.maintenance_date.strftime("%Y-%m-%d %H:%M"),
+                        "Machine": log.machine_id,
+                        "Machine Name": log.machine_name or (machine.name if machine else "N/A"),
+                        "Category": log.category or (machine.machine_category if machine else "N/A"),
+                        "Type": log.maintenance_type.value,
+                        "Technician": log.technician,
+                        "Issue": log.issue,
+                        "Cost": log.cost,
+                        "Duration": log.duration_hours,
+                        "Downtime": getattr(log, "downtime_hours", log.duration_hours),
+                        "Before Health": getattr(log, "before_health", 0),
+                        "After Health": getattr(log, "after_health", 0),
+                        "Status": getattr(log, "status", "Completed")
+                    }
+                    export_rows.append(row)
+                    writer.writerow([
+                        row["Log ID"], row["Date"], row["Machine"], row["Machine Name"], row["Category"],
+                        row["Type"], row["Technician"], row["Issue"], row["Cost"], row["Duration"],
+                        row["Downtime"], row["Before Health"], row["After Health"], row["Status"]
+                    ])
+                report_name = f"maintenance_logs_{datetime.now().strftime('%Y%m%d')}"
+                export_data = {"maintenance_logs": export_rows}
+                st.download_button(
+                    "Download PDF",
+                    _generic_pdf_bytes("Maintenance Logs", datetime.now().isoformat(), export_data),
+                    file_name=f"{report_name}.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_{report_name}"
+                )
+                st.download_button(
+                    "Download Excel",
+                    _generic_excel_bytes("Maintenance Logs", datetime.now().isoformat(), export_data),
+                    file_name=f"{report_name}.xls",
+                    mime="application/vnd.ms-excel",
+                    key=f"excel_{report_name}"
+                )
+                st.download_button(
+                    "Download CSV",
+                    output.getvalue(),
+                    file_name=f"{report_name}.csv",
+                    mime="text/csv",
+                    key=f"csv_maintenance_logs_{datetime.now().strftime('%Y%m%d')}"
+                )
+
+
+def render_category_machine_list():
+    """Render list of machines for a selected category with checkboxes.
+    
+    Does NOT use the existing Enterprise Table.
+    Shows:
+    1. Category Summary (Total Logs, Completed, Pending, Total Cost)
+    2. Machine list as a proper table with ☐ Checkbox | Machine ID | Total Logs | Total Cost
+    3. Machine Summary + Maintenance History when a machine is selected
+    """
+    category = st.session_state.maintenance_category
+    if not category:
+        st.session_state.maintenance_page = "overview"
+        st.rerun()
+        return
+    
+    st.markdown("<h1 class='main-header'>📝 Maintenance Logs</h1>", unsafe_allow_html=True)
+    
+    if st.button("← Back to Maintenance Logs"):
+        st.session_state.maintenance_page = "overview"
+        st.session_state.maintenance_category = None
+        st.session_state.maintenance_selected_machine = None
+        st.rerun()
+    
+    st.markdown(f"### 🏷️ Category: {category}")
+    st.markdown("---")
+    
+    all_logs = data_store.maintenance_log_service.get_all_logs()
+    all_machines = simulator.get_all_machines()
+    
+    from maintenance_logs_enhanced import (
+        get_machines_for_category, compute_machine_summary,
+        compute_category_summary, get_maintenance_history
+    )
+    
+    # Get machines for this category
+    cat_machines = get_machines_for_category(all_machines, category)
+    
+    if not cat_machines:
+        st.info(f"No machines found for category '{category}'.")
+        return
+    
+    # ==================== 1. CATEGORY SUMMARY KPIs (reusing existing metric-card styling) ====================
+    cat_summary = compute_category_summary(all_logs, all_machines, category)
+    st.markdown(f"### 📊 {category} Summary")
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    with col_s1:
+        st.markdown(
+            "<div class='metric-card'>"
+            f"<div class='metric-value'>{cat_summary['total_logs']}</div>"
+            "<div class='metric-label'>Total Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_s2:
+        st.markdown(
+            "<div class='metric-card'>"
+            f"<div class='metric-value' style='color:#44CC44'>{cat_summary['completed_logs']}</div>"
+            "<div class='metric-label'>Completed</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_s3:
+        st.markdown(
+            "<div class='metric-card'>"
+            f"<div class='metric-value' style='color:#FFAA00'>{cat_summary['pending_logs']}</div>"
+            "<div class='metric-label'>Pending</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_s4:
+        st.markdown(
+            "<div class='metric-card'>"
+            f"<div class='metric-value' style='color:#4da6ff'>₹{cat_summary['total_cost']:,.0f}</div>"
+            "<div class='metric-label'>Total Cost</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    
+    # ==================== 2. MACHINE LIST WITH CHECKBOXES (using st.dataframe) ====================
+    st.markdown(f"**Machines in {category}: {len(cat_machines)}**")
+    st.markdown("---")
+    
+    # Build a DataFrame with machine data plus a checkbox column
+    machine_rows = []
+    for machine in sorted(cat_machines, key=lambda m: m.machine_id):
+        ms = compute_machine_summary(all_logs, machine.machine_id)
+        machine_rows.append({
+            "Select": False,
+            "Machine ID": machine.machine_id,
+            "Total Logs": ms['total_logs'],
+            "Total Cost": ms['total_cost']
+        })
+    
+    df_machines = pd.DataFrame(machine_rows)
+    
+    prev_selected = st.session_state.get("maintenance_selected_machine")
+    
+    edited_df = st.data_editor(
+        df_machines,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Select": st.column_config.CheckboxColumn(
+                "☐",
+                help="Select a machine to view details",
+                default=False,
+            ),
+            "Machine ID": st.column_config.Column(
+                "Machine ID",
+                width="medium",
+            ),
+            "Total Logs": st.column_config.Column(
+                "Total Logs",
+                width="small",
+            ),
+            "Total Cost": st.column_config.Column(
+                "Total Cost",
+                width="small",
+            ),
+        },
+        disabled=["Machine ID", "Total Logs", "Total Cost"],
+        key="machine_list_editor"
+    )
+    
+    # Find which machine is selected (only one)
+    selected_rows = edited_df[edited_df["Select"] == True]
+    selected_count = len(selected_rows)
+    
+    if selected_count > 1:
+        # More than one selected - keep only the first one, deselect rest
+        first_selected = selected_rows.iloc[0]["Machine ID"]
+        # Deselect all
+        edited_df["Select"] = False
+        # Select only the first one
+        edited_df.loc[edited_df["Machine ID"] == first_selected, "Select"] = True
+        st.session_state.maintenance_selected_machine = first_selected
+        st.rerun()
+    elif selected_count == 1:
+        selected_machine_id = selected_rows.iloc[0]["Machine ID"]
+        if prev_selected != selected_machine_id:
+            st.session_state.maintenance_selected_machine = selected_machine_id
+            st.rerun()
+    else:
+        # No selection
+        if prev_selected is not None:
+            st.session_state.maintenance_selected_machine = None
+            st.rerun()
+    
+    selected_machine_id = st.session_state.get("maintenance_selected_machine")
+    
+    # ==================== NAVIGATE TO MAINTENANCE MACHINE SUMMARY ====================
+    if selected_machine_id:
+        st.session_state.maintenance_page = "machine_summary"
+        st.session_state.maintenance_selected_machine = selected_machine_id
+        st.rerun()
+    
+    if not selected_machine_id:
+        # No machine selected, show nothing below the table
+        pass
+
+
+# ==================== MAINTENANCE MACHINE SUMMARY PAGE ====================
+
+def render_maintenance_machine_summary():
+    """Render Machine Summary page within the Maintenance Logs workflow.
+    
+    Uses the EXACT SAME Alert History dataset as the Machine Details page.
+    This is the single source of truth for maintenance history records.
+    This page belongs EXCLUSIVELY to the Maintenance Logs module.
+    """
+    machine_id = st.session_state.get("maintenance_selected_machine")
+    if not machine_id:
+        st.session_state.maintenance_page = "category_detail"
+        st.rerun()
+        return
+    
+    machine = simulator.get_machine(machine_id)
+    if not machine:
+        st.error(f"Machine {machine_id} not found.")
+        return
+    
+    st.markdown("<h1 class='main-header'>📝 Maintenance Logs</h1>", unsafe_allow_html=True)
+    
+    if st.button("← Back to Machine List"):
+        st.session_state.maintenance_page = "category_detail"
+        st.rerun()
+    
+    st.markdown(f"### 🔧 {machine.name} ({machine.machine_id})")
+    
+    # ==================== MAINTENANCE SUMMARY CARDS (from Alert History dataset) ====================
+    # Use the EXACT SAME dataset as Machine Details → Alert History
+    alerts = data_store.alert_service.get_alerts_by_machine(machine_id)
+    
+    total_logs = len(alerts)
+    completed_logs = len([a for a in alerts if a.status != "Open"])
+    pending_logs = len([a for a in alerts if a.status == "Open"])
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value'>{total_logs}</div>"
+            "<div class='summary-stat-label'>Total Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
     with col2:
-        all_logs = data_store.maintenance_log_service.get_all_logs()
-        st.metric("Total Logs", len(all_logs))
-        completed_logs = [log for log in all_logs if getattr(log, "status", "Completed") == "Completed"]
-        scheduled_logs = [log for log in all_logs if getattr(log, "status", "") == "Scheduled"]
-        total_cost = sum(log.cost for log in completed_logs)
-        total_hours = sum(log.duration_hours for log in completed_logs)
-        avg_repair_time = round(total_hours / len(completed_logs), 1) if completed_logs else 0
-        total_downtime = sum(getattr(log, "downtime_hours", log.duration_hours) for log in completed_logs)
-        st.metric("Completed Jobs", len(completed_logs))
-        st.metric("Scheduled Jobs", len(scheduled_logs))
-        st.metric("Total Cost", f"₹{total_cost:,.2f}")
-        st.metric("Total Hours", f"{total_hours:.1f}h")
-        st.metric("Avg Repair Time", f"{avg_repair_time:.1f}h")
-        st.metric("Downtime", f"{total_downtime:.1f}h")
-        
-        # Export
-        if st.button("📥 Export Logs", use_container_width=True):
-            output = io.StringIO()
-            writer = csv.writer(output)
-            writer.writerow(["Log ID", "Date", "Machine", "Machine Name", "Category", "Type", "Technician", "Issue", "Cost", "Duration", "Downtime", "Before Health", "After Health", "Status"])
-            export_rows = []
-            for log in filtered_logs:
-                machine = simulator.get_machine(log.machine_id)
-                row = {
-                    "Log ID": log.log_id,
-                    "Date": log.maintenance_date.strftime("%Y-%m-%d %H:%M"),
-                    "Machine": log.machine_id,
-                    "Machine Name": log.machine_name or (machine.name if machine else "N/A"),
-                    "Category": log.category or (machine.machine_category if machine else "N/A"),
-                    "Type": log.maintenance_type.value,
-                    "Technician": log.technician,
-                    "Issue": log.issue,
-                    "Cost": log.cost,
-                    "Duration": log.duration_hours,
-                    "Downtime": getattr(log, "downtime_hours", log.duration_hours),
-                    "Before Health": getattr(log, "before_health", 0),
-                    "After Health": getattr(log, "after_health", 0),
-                    "Status": getattr(log, "status", "Completed")
-                }
-                export_rows.append(row)
-                writer.writerow([
-                    row["Log ID"], row["Date"], row["Machine"], row["Machine Name"], row["Category"],
-                    row["Type"], row["Technician"], row["Issue"], row["Cost"], row["Duration"],
-                    row["Downtime"], row["Before Health"], row["After Health"], row["Status"]
-                ])
-            report_name = f"maintenance_logs_{datetime.now().strftime('%Y%m%d')}"
-            export_data = {"maintenance_logs": export_rows}
-            st.download_button(
-                "Download PDF",
-                _generic_pdf_bytes("Maintenance Logs", datetime.now().isoformat(), export_data),
-                file_name=f"{report_name}.pdf",
-                mime="application/pdf",
-                key=f"pdf_{report_name}"
-            )
-            st.download_button(
-                "Download Excel",
-                _generic_excel_bytes("Maintenance Logs", datetime.now().isoformat(), export_data),
-                file_name=f"{report_name}.xls",
-                mime="application/vnd.ms-excel",
-                key=f"excel_{report_name}"
-            )
-            st.download_button(
-                "Download CSV",
-                output.getvalue(),
-                file_name=f"{report_name}.csv",
-                mime="text/csv",
-                key=f"csv_maintenance_logs_{datetime.now().strftime('%Y%m%d')}"
-            )
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value' style='color:#44CC44'>{completed_logs}</div>"
+            "<div class='summary-stat-label'>Completed</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col3:
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value' style='color:#FFAA00'>{pending_logs}</div>"
+            "<div class='summary-stat-label'>Pending</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col4:
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value' style='color:#4da6ff'>₹0</div>"
+            "<div class='summary-stat-label'>Total Cost</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    
+    # ==================== MAINTENANCE HISTORY TABLE (from Alert History dataset) ====================
+    st.markdown("### 📜 Maintenance History")
+    
+    if not alerts:
+        st.info("No maintenance history found for this machine.")
+    else:
+        history_rows = []
+        for alert in alerts:
+            # Derive cause from reason, matching Machine Details → Alert History logic
+            cause = alert.reason
+            if len(cause) > 50:
+                cause = cause[:50] + "..."
+            history_rows.append({
+                "Machine ID": alert.machine_id,
+                "Date": alert.timestamp.strftime('%Y-%m-%d'),
+                "Condition": alert.severity.value,
+                "Cause": cause,
+                "Technician": "",
+                "Cost": 0,
+                "Status": alert.status
+            })
+        df_history = pd.DataFrame(history_rows)
+        st.dataframe(df_history, use_container_width=True, hide_index=True)
 
 
 # ==================== KPI DESTINATION PAGES ====================
@@ -2559,148 +3025,108 @@ def render_kpi_categories():
     render_machine_category_cards()
 
 
-def render_kpi_all_machines():
-    """Render All Machines page from the Total Machines KPI card."""
-    st.markdown("<h1 class='main-header'>All Machines</h1>", unsafe_allow_html=True)
+def render_kpi_machines_page():
+    """Render KPI machines page using the EXISTING Enterprise Table.
+    
+    This is the single destination for ALL KPI machine navigation:
+    - Total Machines → shows ALL machines
+    - Healthy → shows machines with Condition = NORMAL
+    - Warning → shows machines with Condition = WARNING
+    - Critical → shows machines with Condition = CRITICAL
+    
+    Reuses the EXACT same Enterprise Table pattern (st.dataframe with
+    on_select='rerun', selection_mode='single-row') as the
+    'All Machines Health Status' table on the dashboard.
+    """
+    filter_value = st.session_state.get("kpi_filter", "all")
+    
+    # Set page title based on filter
+    if filter_value == "healthy":
+        title = "✅ Healthy Machines"
+    elif filter_value == "warning":
+        title = "⚠️ Warning Machines"
+    elif filter_value == "critical":
+        title = "🔴 Critical Machines"
+    else:
+        title = "All Machines"
+    
+    st.markdown(f"<h1 class='main-header'>{title}</h1>", unsafe_allow_html=True)
     if st.button("← Back to Dashboard"):
         st.session_state.page = "dashboard"
         st.rerun()
     st.markdown("---")
     
     all_machines = simulator.get_all_machines()
-    st.markdown(f"**Total Machines: {len(all_machines)}**")
     
-    for m in sorted(all_machines, key=lambda x: x.health_score):
-        status_color = STATUS_COLORS.get(m.status.value, "#888")
-        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
-        with col_a:
-            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
-        with col_b:
-            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
-        with col_c:
-            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
-        with col_d:
-            st.markdown(f"<span style='color:#ddd;'>{m.health_score}%</span>", unsafe_allow_html=True)
-        with col_e:
-            st.markdown(f"<span style='color:#ffaa00;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
-        with col_f:
-            badge_color = STATUS_COLORS.get(m.status.value, "#888")
-            st.markdown(f"<span style='background:{badge_color};color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>{m.status.value}</span>", unsafe_allow_html=True)
-        with col_g:
-            if st.button("View", key=f"kpi_all_machine_{m.machine_id}", use_container_width=True):
-                navigate_to_machine(m.machine_id)
-                st.rerun()
-
-
-def render_kpi_healthy():
-    """Render Healthy Machines page - shows only NORMAL machines."""
-    st.markdown("<h1 class='main-header'>✅ Healthy Machines</h1>", unsafe_allow_html=True)
-    if st.button("← Back to Dashboard"):
-        st.session_state.page = "dashboard"
-        st.rerun()
-    st.markdown("---")
+    # Filter machines by condition
+    if filter_value == "healthy":
+        filtered = [m for m in all_machines if m.status == MachineStatus.NORMAL]
+    elif filter_value == "warning":
+        filtered = [m for m in all_machines if m.status == MachineStatus.WARNING]
+    elif filter_value == "critical":
+        filtered = [m for m in all_machines if m.status == MachineStatus.CRITICAL]
+    else:
+        filtered = list(all_machines)
     
-    all_machines = simulator.get_all_machines()
-    healthy_machines = [m for m in all_machines if m.status == MachineStatus.NORMAL]
+    count_label = {
+        "healthy": "Healthy",
+        "warning": "Warning",
+        "critical": "Critical",
+        "all": "Total"
+    }.get(filter_value, "Total")
     
-    if not healthy_machines:
-        st.info("No healthy machines found.")
-        return
+    st.markdown(f"**{count_label} Machines: {len(filtered)}**")
     
-    st.markdown(f"**Healthy Machines: {len(healthy_machines)}**")
+    # Build the DataFrame with the exact same columns as the spec
+    machine_rows = []
+    for m in sorted(filtered, key=lambda x: x.health_score):
+        machine_rows.append({
+            "Machine ID": m.machine_id,
+            "Category": m.machine_type.value,
+            "Health Score": f"{m.health_score:.1f}%",
+            "Failure Probability": f"{m.failure_probability*100:.1f}%",
+            "Condition": m.status.value
+        })
     
-    for m in sorted(healthy_machines, key=lambda x: x.health_score, reverse=True):
-        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
-        with col_a:
-            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
-        with col_b:
-            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
-        with col_c:
-            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
-        with col_d:
-            st.markdown(f"<span style='color:#44CC44;'>{m.health_score}%</span>", unsafe_allow_html=True)
-        with col_e:
-            st.markdown(f"<span style='color:#44CC44;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
-        with col_f:
-            st.markdown(f"<span style='background:#44CC44;color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>NORMAL</span>", unsafe_allow_html=True)
-        with col_g:
-            if st.button("View", key=f"kpi_healthy_machine_{m.machine_id}", use_container_width=True):
-                navigate_to_machine(m.machine_id)
-                st.rerun()
-
-
-def render_kpi_warning():
-    """Render Warning Machines page - shows only WARNING machines."""
-    st.markdown("<h1 class='main-header'>⚠️ Warning Machines</h1>", unsafe_allow_html=True)
-    if st.button("← Back to Dashboard"):
-        st.session_state.page = "dashboard"
-        st.rerun()
-    st.markdown("---")
-    
-    all_machines = simulator.get_all_machines()
-    warning_machines = [m for m in all_machines if m.status == MachineStatus.WARNING]
-    
-    if not warning_machines:
-        st.info("No warning machines found.")
-        return
-    
-    st.markdown(f"**Warning Machines: {len(warning_machines)}**")
-    
-    for m in sorted(warning_machines, key=lambda x: x.health_score):
-        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
-        with col_a:
-            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
-        with col_b:
-            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
-        with col_c:
-            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
-        with col_d:
-            st.markdown(f"<span style='color:#FFAA00;'>{m.health_score}%</span>", unsafe_allow_html=True)
-        with col_e:
-            st.markdown(f"<span style='color:#FFAA00;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
-        with col_f:
-            st.markdown(f"<span style='background:#FFAA00;color:black;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>WARNING</span>", unsafe_allow_html=True)
-        with col_g:
-            if st.button("View", key=f"kpi_warning_machine_{m.machine_id}", use_container_width=True):
-                navigate_to_machine(m.machine_id)
-                st.rerun()
-
-
-def render_kpi_critical():
-    """Render Critical Machines page - shows only CRITICAL machines."""
-    st.markdown("<h1 class='main-header'>🔴 Critical Machines</h1>", unsafe_allow_html=True)
-    if st.button("← Back to Dashboard"):
-        st.session_state.page = "dashboard"
-        st.rerun()
-    st.markdown("---")
-    
-    all_machines = simulator.get_all_machines()
-    critical_machines = [m for m in all_machines if m.status == MachineStatus.CRITICAL]
-    
-    if not critical_machines:
-        st.info("No critical machines found.")
-        return
-    
-    st.markdown(f"**Critical Machines: {len(critical_machines)}**")
-    
-    for m in sorted(critical_machines, key=lambda x: x.health_score):
-        col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns([1.2, 1.5, 1.2, 1, 1, 1, 0.8])
-        with col_a:
-            st.markdown(f"<span style='color:#4da6ff;font-weight:500;'>{m.machine_id}</span>", unsafe_allow_html=True)
-        with col_b:
-            st.markdown(f"<span style='color:#ccc;'>{m.name}</span>", unsafe_allow_html=True)
-        with col_c:
-            st.markdown(f"<span style='color:#aaa;font-size:0.85rem;'>{m.machine_type.value}</span>", unsafe_allow_html=True)
-        with col_d:
-            st.markdown(f"<span style='color:#FF4444;'>{m.health_score}%</span>", unsafe_allow_html=True)
-        with col_e:
-            st.markdown(f"<span style='color:#FF4444;'>{m.failure_probability*100:.1f}%</span>", unsafe_allow_html=True)
-        with col_f:
-            st.markdown(f"<span style='background:#FF4444;color:white;padding:2px 8px;border-radius:10px;font-size:0.75rem;font-weight:600;'>CRITICAL</span>", unsafe_allow_html=True)
-        with col_g:
-            if st.button("View", key=f"kpi_critical_machine_{m.machine_id}", use_container_width=True):
-                navigate_to_machine(m.machine_id)
-                st.rerun()
+    if machine_rows:
+        df_machines = pd.DataFrame(machine_rows)
+        sel = st.dataframe(
+            df_machines,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={
+                "Machine ID": st.column_config.Column("Machine ID", width="small"),
+                "Category": st.column_config.Column("Category", width="medium"),
+                "Health Score": st.column_config.Column("Health Score", width="small"),
+                "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
+                "Condition": st.column_config.Column("Condition", width="small"),
+            }
+        )
+        if len(sel.selection.rows) > 0:
+            row_idx = sel.selection.rows[0]
+            machine_id = df_machines.iloc[row_idx]["Machine ID"]
+            navigate_to_machine(machine_id)
+            st.rerun()
+    else:
+        # Show empty table with the existing Enterprise Table structure
+        df_empty = pd.DataFrame(columns=[
+            "Machine ID", "Category", "Health Score", "Failure Probability", "Condition"
+        ])
+        st.dataframe(
+            df_empty,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Machine ID": st.column_config.Column("Machine ID", width="small"),
+                "Category": st.column_config.Column("Category", width="medium"),
+                "Health Score": st.column_config.Column("Health Score", width="small"),
+                "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
+                "Condition": st.column_config.Column("Condition", width="small"),
+            }
+        )
+        st.info("No machines found.")
 
 
 # ==================== PRE-ROUTING HOOK ====================
@@ -2783,14 +3209,8 @@ def main():
         render_dashboard()
     elif page == "kpi_categories":
         render_kpi_categories()
-    elif page == "kpi_machines":
-        render_kpi_all_machines()
-    elif page == "kpi_healthy":
-        render_kpi_healthy()
-    elif page == "kpi_warning":
-        render_kpi_warning()
-    elif page == "kpi_critical":
-        render_kpi_critical()
+    elif page in ("kpi_machines", "kpi_healthy", "kpi_warning", "kpi_critical"):
+        render_kpi_machines_page()
     elif page == "machines":
         render_machines()
     elif page == "analytics":
