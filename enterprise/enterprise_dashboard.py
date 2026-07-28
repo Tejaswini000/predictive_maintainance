@@ -42,6 +42,50 @@ st.set_page_config(
     # Custom CSS for dark enterprise theme
 st.markdown("""
 <style>
+    /* Analytics badge buttons - match original badge styling exactly */
+    .stButton button[kind="analytics-badge"] {
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        padding: 6px 12px !important;
+        border-radius: 20px !important;
+        font-size: 15px !important;
+        font-weight: 600 !important;
+        color: #1F2937 !important;
+        background: #F3F4F6 !important;
+        border: 1px solid #E5E7EB !important;
+        white-space: nowrap !important;
+        min-height: 0 !important;
+        height: auto !important;
+        line-height: normal !important;
+        width: auto !important;
+        min-width: 0 !important;
+        box-shadow: none !important;
+        text-align: center !important;
+        transition: none !important;
+    }
+    .stButton button[kind="analytics-badge"]:hover {
+        border-color: #4da6ff !important;
+        box-shadow: 0 2px 8px rgba(77, 166, 255, 0.2) !important;
+        background: #F3F4F6 !important;
+    }
+    .stButton button[kind="analytics-badge"].healthy-badge { background: #DCFCE7 !important; color: #166534 !important; border-color: #BBF7D0 !important; }
+    .stButton button[kind="analytics-badge"].warning-badge { background: #FEF3C7 !important; color: #92400E !important; border-color: #FDE68A !important; }
+    .stButton button[kind="analytics-badge"].critical-badge { background: #FEE2E2 !important; color: #991B1B !important; border-color: #FECACA !important; }
+    .stButton button[kind="analytics-badge"].health-badge { background: #FCE7F3 !important; color: #9D174D !important; border-color: #FBCFE8 !important; }
+    .stButton button[kind="analytics-badge"].alerts-badge { background: #E0F2FE !important; color: #075985 !important; border-color: #BAE6FD !important; }
+    .stButton button[kind="analytics-badge"].maint-badge { background: #EDE9FE !important; color: #5B21B6 !important; border-color: #DDD6FE !important; }
+    /* Ensure button wrapper doesn't stretch */
+    .stButton[kind="analytics-badge-wrapper"] { display: inline-flex !important; width: auto !important; }
+    /* Analytics badge row columns - don't force full width */
+    .analytics-badge-row .stButton { width: auto !important; display: inline-flex !important; }
+    .analytics-badge-row .stButton button { width: auto !important; }
+    /* Ensure analytics columns don't force button to stretch */
+    div[data-testid="column"]:has(> .stButton button[kind="analytics-badge"]) {
+        flex: 0 0 auto !important;
+        width: auto !important;
+        min-width: 0 !important;
+    }
     .main-header { font-size: 2.2rem; font-weight: 700; margin-bottom: 0; }
     .sub-header { font-size: 1.1rem; color: #888; margin-top: 0; }
     .metric-card { 
@@ -1551,6 +1595,22 @@ def render_analytics():
         .analytics-stat-badge.health { background: #FCE7F3; color: #9D174D; border-color: #FBCFE8; }
         .analytics-stat-badge.alerts { background: #E0F2FE; color: #075985; border-color: #BAE6FD; }
         .analytics-stat-badge.maintenance { background: #EDE9FE; color: #5B21B6; border-color: #DDD6FE; }
+        /* Analytics category cards - style the column containing the card header */
+        div[data-testid="column"]:has(.analytics-card-header) {
+            background: #FFFFFF !important;
+            border: 1px solid #E5E7EB !important;
+            border-radius: 18px !important;
+            padding: 22px 22px 12px !important;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.08) !important;
+            margin: 0 !important;
+        }
+        /* Remove extra padding from inner containers inside analytics card columns */
+        div[data-testid="column"]:has(.analytics-card-header) > div {
+            background: transparent !important;
+            border: none !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+        }
         @media (max-width: 1024px) {
             .analytics-card-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1616,29 +1676,35 @@ def render_analytics():
         "Car Engine": "&#128663;",
     }
     st.markdown("<div class='analytics-section-title'>Category Summary</div>", unsafe_allow_html=True)
-    card_html = ["<div class='analytics-card-grid'>"]
+    card_cols = st.columns(3)
     for idx, row in enumerate(category_rows):
-        status_color = "#EF4444" if row["Critical"] else "#F59E0B" if row["Warning"] else "#22C55E"
-        icon = category_icons.get(row["Category"], "&#9881;&#65039;")
-        cname = row["Category"]
-        import urllib.parse
-        cname_encoded = urllib.parse.quote(cname)
-        card_html.append(f"""
-<div class='analytics-category-card' style='--health-border: {status_color};'>
-<div class='analytics-card-title'>{icon} {cname}</div>
-<div class='analytics-card-subtitle'>Machines: {row["Machines"]}</div>
-<div class='analytics-badge-wrap'>
-<a href='?achip={cname_encoded}&afilter=healthy' style='text-decoration:none;'><span class='analytics-stat-badge healthy'>&#128994; Healthy {row["Healthy"]}</span></a>
-<a href='?achip={cname_encoded}&afilter=warning' style='text-decoration:none;'><span class='analytics-stat-badge warning'>&#128993; Warning {row["Warning"]}</span></a>
-<a href='?achip={cname_encoded}&afilter=critical' style='text-decoration:none;'><span class='analytics-stat-badge critical'>&#128308; Critical {row["Critical"]}</span></a>
-<a href='?achip={cname_encoded}&afilter=health' style='text-decoration:none;'><span class='analytics-stat-badge health'>&#10084;&#65039; Avg Health {row["Average Health"]}%</span></a>
-<a href='?achip={cname_encoded}&afilter=alerts' style='text-decoration:none;'><span class='analytics-stat-badge alerts'>&#128680; Alerts {row["Open Alerts"]}</span></a>
-<a href='?achip={cname_encoded}&afilter=maintenance' style='text-decoration:none;'><span class='analytics-stat-badge maintenance'>&#128295; Maintenance {row["Maintenance Count"]}</span></a>
+        with card_cols[idx % 3]:
+            status_color = "#EF4444" if row["Critical"] else "#F59E0B" if row["Warning"] else "#22C55E"
+            icon = category_icons.get(row["Category"], "&#9881;&#65039;")
+            cname = row["Category"]
+            # Build query param URLs for each badge (relative URLs navigate within same tab)
+            def qp(cat, filt, page, maint_cat=None):
+                base = f"?_analytics_category={cat}&_analytics_filter={filt}&_analytics_page={page}"
+                if maint_cat:
+                    base += f"&_maint_cat={maint_cat}"
+                return base
+            # Render entire card as ONE complete HTML block - all badges INSIDE the card
+            st.markdown(f"""
+<div style='background: #FFFFFF; border: 1px solid #E5E7EB; border-left: 6px solid {status_color}; border-radius: 18px; padding: 22px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); font-family: Inter, sans-serif;'>
+<div style='font-size: 24px; line-height: 1.2; font-weight: 700; color: #1F2937; margin: 0 0 10px 0;'>{icon} {cname}</div>
+<div style='font-size: 16px; color: #6B7280; margin: 0 0 18px 0;'>Machines: {row["Machines"]}</div>
+<div style='display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;'>
+<a href='{qp(cname, "healthy", "analytics_machines")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #166534; background: #DCFCE7; border: 1px solid #BBF7D0; text-decoration: none; white-space: nowrap;'>✅ Healthy {row["Healthy"]}</a>
+<a href='{qp(cname, "warning", "analytics_machines")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #92400E; background: #FEF3C7; border: 1px solid #FDE68A; text-decoration: none; white-space: nowrap;'>🟡 Warning {row["Warning"]}</a>
+<a href='{qp(cname, "critical", "analytics_machines")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #991B1B; background: #FEE2E2; border: 1px solid #FECACA; text-decoration: none; white-space: nowrap;'>🔴 Critical {row["Critical"]}</a>
+</div>
+<div style='display: flex; flex-wrap: wrap; gap: 8px;'>
+<a href='{qp(cname, "health", "analytics_health_overview")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #9D174D; background: #FCE7F3; border: 1px solid #FBCFE8; text-decoration: none; white-space: nowrap;'>❤️ Avg Health {row["Average Health"]}%</a>
+<a href='{qp(cname, "alerts", "alerts")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #075985; background: #E0F2FE; border: 1px solid #BAE6FD; text-decoration: none; white-space: nowrap;'>🚨 Alerts {row["Open Alerts"]}</a>
+<a href='{qp(cname, "maintenance", "maintenance_logs", cname)}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #5B21B6; background: #EDE9FE; border: 1px solid #DDD6FE; text-decoration: none; white-space: nowrap;'>🔧 Maintenance {row["Maintenance Count"]}</a>
 </div>
 </div>
-""")
-    card_html.append("</div>")
-    st.markdown("".join(card_html), unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -1654,8 +1720,16 @@ def render_analytics():
 
     col1, col2 = st.columns(2)
     with col1:
-        fig = px.line(pd.DataFrame(trend_rows), x="Date", y="Average Health", title="Fleet Health Trend", markers=True)
-        fig.update_layout(height=360, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', yaxis_range=[0, 100])
+        health_df = pd.DataFrame(category_rows)
+        fig = px.bar(
+            health_df,
+            x="Category",
+            y="Average Health",
+            title="Average Health by Category",
+            color="Category",
+            color_discrete_map=MACHINE_TYPE_COLORS,
+        )
+        fig.update_layout(height=360, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
@@ -1670,26 +1744,6 @@ def render_analytics():
         )
         fig.update_layout(height=360, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
-
-    forecast_buckets = {"Overdue": 0, "Next 7 Days": 0, "8-30 Days": 0, "31+ Days": 0, "Not Scheduled": 0}
-    for machine in all_machines:
-        if not machine.next_maintenance_date:
-            forecast_buckets["Not Scheduled"] += 1
-            continue
-        days_to_maintenance = (machine.next_maintenance_date - today).days
-        if days_to_maintenance < 0:
-            forecast_buckets["Overdue"] += 1
-        elif days_to_maintenance <= 7:
-            forecast_buckets["Next 7 Days"] += 1
-        elif days_to_maintenance <= 30:
-            forecast_buckets["8-30 Days"] += 1
-        else:
-            forecast_buckets["31+ Days"] += 1
-
-    forecast_df = pd.DataFrame([{"Window": window, "Machines": count} for window, count in forecast_buckets.items()])
-    fig = px.bar(forecast_df, x="Window", y="Machines", title="Maintenance Forecast", color="Window")
-    fig.update_layout(height=430, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1728,46 +1782,27 @@ def render_analytics():
         fig.update_layout(height=360, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', yaxis_range=[0, 100])
         st.plotly_chart(fig, use_container_width=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        health_rows = []
-        for category, machines in machines_by_category.items():
-            for machine in machines:
-                health_rows.append({"Category": category, "Health Score": machine.health_score, "Machine": machine.machine_id})
-        fig = px.box(
-            pd.DataFrame(health_rows),
-            x="Category",
-            y="Health Score",
-            color="Category",
-            title="Equipment Health Distribution",
-            points="all",
-            color_discrete_map=MACHINE_TYPE_COLORS,
-        )
-        fig.update_layout(height=390, paper_bgcolor='rgba(0,0,0,0)', font_color='#ccc', showlegend=False, yaxis_range=[0, 100])
-        st.plotly_chart(fig, use_container_width=True)
+    st.subheader("AI Recommendations")
+    recommendations = []
+    critical_machines = [m for m in all_machines if m.status == MachineStatus.CRITICAL]
+    warning_machines = [m for m in all_machines if m.status == MachineStatus.WARNING]
+    due_soon = [m for m in all_machines if m.next_maintenance_date and (m.next_maintenance_date - today).days <= 7]
+    if critical_machines:
+        recommendations.append(f"Immediate inspection needed for {len(critical_machines)} critical machines.")
+    if warning_machines:
+        recommendations.append(f"Plan preventive maintenance for {len(warning_machines)} warning machines.")
+    if due_soon:
+        recommendations.append(f"Schedule maintenance capacity for {len(due_soon)} machines due within 7 days.")
+    if open_alerts:
+        recommendations.append(f"Review and close {len(open_alerts)} open alerts before the next operating cycle.")
+    weakest_category = min(category_rows, key=lambda row: row["Average Health"], default=None)
+    if weakest_category:
+        recommendations.append(f"Prioritize {weakest_category['Category']} because it has the lowest average health at {weakest_category['Average Health']}%.")
+    if not recommendations:
+        recommendations.append("Fleet condition is stable. Continue routine monitoring and scheduled maintenance.")
 
-    with col2:
-        st.subheader("AI Recommendations")
-        recommendations = []
-        critical_machines = [m for m in all_machines if m.status == MachineStatus.CRITICAL]
-        warning_machines = [m for m in all_machines if m.status == MachineStatus.WARNING]
-        due_soon = [m for m in all_machines if m.next_maintenance_date and (m.next_maintenance_date - today).days <= 7]
-        if critical_machines:
-            recommendations.append(f"Immediate inspection needed for {len(critical_machines)} critical machines.")
-        if warning_machines:
-            recommendations.append(f"Plan preventive maintenance for {len(warning_machines)} warning machines.")
-        if due_soon:
-            recommendations.append(f"Schedule maintenance capacity for {len(due_soon)} machines due within 7 days.")
-        if open_alerts:
-            recommendations.append(f"Review and close {len(open_alerts)} open alerts before the next operating cycle.")
-        weakest_category = min(category_rows, key=lambda row: row["Average Health"], default=None)
-        if weakest_category:
-            recommendations.append(f"Prioritize {weakest_category['Category']} because it has the lowest average health at {weakest_category['Average Health']}%.")
-        if not recommendations:
-            recommendations.append("Fleet condition is stable. Continue routine monitoring and scheduled maintenance.")
-
-        for recommendation in recommendations:
-            st.info(recommendation)
+    for recommendation in recommendations:
+        st.info(recommendation)
 
     # === HIGH RISK MACHINES DETAIL ===
     st.markdown("---")
@@ -2990,6 +3025,153 @@ def render_maintenance_machine_summary():
         st.dataframe(df_history, use_container_width=True, hide_index=True)
 
 
+# ==================== ANALYTICS DESTINATION PAGES ====================
+
+def render_analytics_machines():
+    """Render filtered machine list for Analytics badge clicks.
+    
+    Navigated from Analytics → Healthy/Warning/Critical badges.
+    Shows the EXISTING Enterprise Table with machines filtered
+    by the selected category and condition filter.
+    Back button returns to Analytics page.
+    """
+    category = st.session_state.get("analytics_category", "")
+    afilter = st.session_state.get("analytics_chip_filter", "healthy")
+    
+    st.markdown(f"<h1 class='main-header'>Equipment Analytics - {category}</h1>", unsafe_allow_html=True)
+    if st.button("← Back to Analytics"):
+        st.session_state.page = "analytics"
+        st.rerun()
+    st.markdown("---")
+    
+    all_machines = simulator.get_all_machines()
+    
+    from maintenance_logs_enhanced import get_machines_for_category
+    cat_machines = get_machines_for_category(all_machines, category)
+    
+    # Filter by condition
+    if afilter == "healthy":
+        filtered = [m for m in cat_machines if m.status == MachineStatus.NORMAL]
+        title = "✅ Healthy Machines"
+    elif afilter == "warning":
+        filtered = [m for m in cat_machines if m.status == MachineStatus.WARNING]
+        title = "⚠️ Warning Machines"
+    elif afilter == "critical":
+        filtered = [m for m in cat_machines if m.status == MachineStatus.CRITICAL]
+        title = "🔴 Critical Machines"
+    else:
+        filtered = list(cat_machines)
+        title = f"{category} Machines"
+    
+    st.markdown(f"**{title}: {len(filtered)}**")
+    
+    machine_rows = []
+    for m in sorted(filtered, key=lambda x: x.health_score):
+        machine_rows.append({
+            "Machine ID": m.machine_id,
+            "Category": m.machine_type.value,
+            "Health Score": f"{m.health_score:.1f}%",
+            "Failure Probability": f"{m.failure_probability*100:.1f}%",
+            "Condition": m.status.value
+        })
+    
+    if machine_rows:
+        df_machines = pd.DataFrame(machine_rows)
+        sel = st.dataframe(
+            df_machines,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={
+                "Machine ID": st.column_config.Column("Machine ID", width="small"),
+                "Category": st.column_config.Column("Category", width="medium"),
+                "Health Score": st.column_config.Column("Health Score", width="small"),
+                "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
+                "Condition": st.column_config.Column("Condition", width="small"),
+            }
+        )
+        if len(sel.selection.rows) > 0:
+            row_idx = sel.selection.rows[0]
+            machine_id = df_machines.iloc[row_idx]["Machine ID"]
+            navigate_to_machine(machine_id)
+            st.rerun()
+    else:
+        df_empty = pd.DataFrame(columns=[
+            "Machine ID", "Category", "Health Score", "Failure Probability", "Condition"
+        ])
+        st.dataframe(
+            df_empty,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Machine ID": st.column_config.Column("Machine ID", width="small"),
+                "Category": st.column_config.Column("Category", width="medium"),
+                "Health Score": st.column_config.Column("Health Score", width="small"),
+                "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
+                "Condition": st.column_config.Column("Condition", width="small"),
+            }
+        )
+        st.info("No machines found.")
+
+
+def render_analytics_health_overview():
+    """Render category health overview page.
+    
+    Navigated from Analytics → Avg Health badge.
+    Shows all machines in the selected category with health scores.
+    Back button returns to Analytics page.
+    """
+    category = st.session_state.get("analytics_category", "")
+    
+    st.markdown(f"<h1 class='main-header'>Equipment Analytics - {category} Health Overview</h1>", unsafe_allow_html=True)
+    if st.button("← Back to Analytics"):
+        st.session_state.page = "analytics"
+        st.rerun()
+    st.markdown("---")
+    
+    all_machines = simulator.get_all_machines()
+    
+    from maintenance_logs_enhanced import get_machines_for_category
+    cat_machines = get_machines_for_category(all_machines, category)
+    
+    st.markdown(f"**{category}: {len(cat_machines)} machines**")
+    
+    machine_rows = []
+    for m in sorted(cat_machines, key=lambda x: x.health_score):
+        machine_rows.append({
+            "Machine ID": m.machine_id,
+            "Category": m.machine_type.value,
+            "Health Score": f"{m.health_score:.1f}%",
+            "Failure Probability": f"{m.failure_probability*100:.1f}%",
+            "Condition": m.status.value
+        })
+    
+    if machine_rows:
+        df_machines = pd.DataFrame(machine_rows)
+        sel = st.dataframe(
+            df_machines,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={
+                "Machine ID": st.column_config.Column("Machine ID", width="small"),
+                "Category": st.column_config.Column("Category", width="medium"),
+                "Health Score": st.column_config.Column("Health Score", width="small"),
+                "Failure Probability": st.column_config.Column("Failure Probability", width="small"),
+                "Condition": st.column_config.Column("Condition", width="small"),
+            }
+        )
+        if len(sel.selection.rows) > 0:
+            row_idx = sel.selection.rows[0]
+            machine_id = df_machines.iloc[row_idx]["Machine ID"]
+            navigate_to_machine(machine_id)
+            st.rerun()
+    else:
+        st.info("No machines found.")
+
+
 # ==================== KPI DESTINATION PAGES ====================
 
 def render_kpi_categories():
@@ -3164,31 +3346,29 @@ def pre_route():
         query_params.clear()
         return
     
-    # Handle Analytics Category Chip clicks
-    achip = query_params.get("achip")
-    afilter = query_params.get("afilter")
-    if achip and afilter:
-        st.session_state.analytics_category = achip
-        st.session_state.analytics_chip_filter = afilter
-        st.session_state._from_analytics = True
-        if afilter in ("healthy", "warning", "critical"):
-            st.session_state.page = "analytics_machines"
-        elif afilter == "health":
-            st.session_state.page = "analytics_health_overview"
-        elif afilter == "alerts":
-            st.session_state.page = "alerts"
-        elif afilter == "maintenance":
-            st.session_state.maintenance_category = achip
-            st.session_state.maintenance_page = "category_detail"
-            st.session_state.page = "maintenance_logs"
-        query_params.clear()
-        return
-    
     # Handle Machine ID click navigation from LinkColumn tables
     navigate_machine = query_params.get("navigate")
     if navigate_machine:
         st.session_state.page = "machines"
         st.session_state.selected_machine = navigate_machine
+        query_params.clear()
+        return
+    
+    # Handle Analytics Category Summary badge clicks via query params (relative URLs in same tab)
+    analytics_page = query_params.get("_analytics_page")
+    if analytics_page:
+        analytics_category = query_params.get("_analytics_category", "")
+        analytics_filter = query_params.get("_analytics_filter", "")
+        if analytics_category:
+            st.session_state.analytics_category = analytics_category
+        if analytics_filter:
+            st.session_state.analytics_chip_filter = analytics_filter
+        st.session_state._from_analytics = True
+        maint_cat = query_params.get("_maint_cat", "")
+        if maint_cat:
+            st.session_state.maintenance_category = maint_cat
+            st.session_state.maintenance_page = "category_detail"
+        st.session_state.page = analytics_page
         query_params.clear()
         return
 
@@ -3212,6 +3392,10 @@ def main():
         render_machines()
     elif page == "analytics":
         render_analytics()
+    elif page == "analytics_machines":
+        render_analytics_machines()
+    elif page == "analytics_health_overview":
+        render_analytics_health_overview()
     elif page == "alerts":
         render_alerts()
     elif page == "work_orders":
