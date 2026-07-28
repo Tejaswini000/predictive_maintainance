@@ -262,6 +262,12 @@ def init_session_state():
         st.session_state.maintenance_selected_machine = None
     if "maintenance_page" not in st.session_state:
         st.session_state.maintenance_page = "overview"
+    if "analytics_category" not in st.session_state:
+        st.session_state.analytics_category = None
+    if "analytics_chip_filter" not in st.session_state:
+        st.session_state.analytics_chip_filter = None
+    if "_from_analytics" not in st.session_state:
+        st.session_state._from_analytics = False
 
 init_session_state()
 
@@ -1570,6 +1576,16 @@ def render_analytics():
         for fid, finfo in simulator.get_all_factories().items()
     }
 
+    # Pre-compute maintenance log count per category from actual maintenance logs
+    all_maintenance_logs = data_store.maintenance_log_service.get_all_logs()
+    machine_map = {m.machine_id: m for m in all_machines}
+    cat_maintenance_counts = {}
+    for log in all_maintenance_logs:
+        log_machine = machine_map.get(log.machine_id)
+        if log_machine:
+            cat = log_machine.machine_category
+            cat_maintenance_counts[cat] = cat_maintenance_counts.get(cat, 0) + 1
+
     category_rows = []
     for category, machines in machines_by_category.items():
         machine_ids = {m.machine_id for m in machines}
@@ -1578,6 +1594,7 @@ def render_analytics():
             m for m in machines
             if m.next_maintenance_date and (m.next_maintenance_date - today).days <= 7
         ]
+        maint_count = cat_maintenance_counts.get(category, 0)
         category_rows.append({
             "Category": category,
             "Machines": len(machines),
@@ -1587,6 +1604,7 @@ def render_analytics():
             "Average Health": round(sum(m.health_score for m in machines) / len(machines), 1) if machines else 0,
             "Open Alerts": len(category_open_alerts),
             "Maintenance Due": len(maintenance_due),
+            "Maintenance Count": maint_count,
             "Average Failure Probability": round(sum(m.failure_probability for m in machines) / len(machines) * 100, 1) if machines else 0,
         })
 
@@ -1602,17 +1620,20 @@ def render_analytics():
     for idx, row in enumerate(category_rows):
         status_color = "#EF4444" if row["Critical"] else "#F59E0B" if row["Warning"] else "#22C55E"
         icon = category_icons.get(row["Category"], "&#9881;&#65039;")
+        cname = row["Category"]
+        import urllib.parse
+        cname_encoded = urllib.parse.quote(cname)
         card_html.append(f"""
 <div class='analytics-category-card' style='--health-border: {status_color};'>
-<div class='analytics-card-title'>{icon} {row["Category"]}</div>
+<div class='analytics-card-title'>{icon} {cname}</div>
 <div class='analytics-card-subtitle'>Machines: {row["Machines"]}</div>
 <div class='analytics-badge-wrap'>
-<span class='analytics-stat-badge healthy'>&#128994; Healthy {row["Healthy"]}</span>
-<span class='analytics-stat-badge warning'>&#128993; Warning {row["Warning"]}</span>
-<span class='analytics-stat-badge critical'>&#128308; Critical {row["Critical"]}</span>
-<span class='analytics-stat-badge health'>&#10084;&#65039; Avg Health {row["Average Health"]}%</span>
-<span class='analytics-stat-badge alerts'>&#128680; Alerts {row["Open Alerts"]}</span>
-<span class='analytics-stat-badge maintenance'>&#128295; Maintenance {row["Maintenance Due"]}</span>
+<a href='?achip={cname_encoded}&afilter=healthy' style='text-decoration:none;'><span class='analytics-stat-badge healthy'>&#128994; Healthy {row["Healthy"]}</span></a>
+<a href='?achip={cname_encoded}&afilter=warning' style='text-decoration:none;'><span class='analytics-stat-badge warning'>&#128993; Warning {row["Warning"]}</span></a>
+<a href='?achip={cname_encoded}&afilter=critical' style='text-decoration:none;'><span class='analytics-stat-badge critical'>&#128308; Critical {row["Critical"]}</span></a>
+<a href='?achip={cname_encoded}&afilter=health' style='text-decoration:none;'><span class='analytics-stat-badge health'>&#10084;&#65039; Avg Health {row["Average Health"]}%</span></a>
+<a href='?achip={cname_encoded}&afilter=alerts' style='text-decoration:none;'><span class='analytics-stat-badge alerts'>&#128680; Alerts {row["Open Alerts"]}</span></a>
+<a href='?achip={cname_encoded}&afilter=maintenance' style='text-decoration:none;'><span class='analytics-stat-badge maintenance'>&#128295; Maintenance {row["Maintenance Count"]}</span></a>
 </div>
 </div>
 """)
@@ -2550,50 +2571,6 @@ def render_maintenance_logs():
     from maintenance_logs_enhanced import compute_all_category_summaries
     all_category_summaries = compute_all_category_summaries(all_logs, all_machines)
     
-    # ==================== OVERALL SUMMARY KPI CARDS (GLOBAL values) ====================
-    total_logs_all = len(all_logs)
-    completed_logs_all = len([log for log in all_logs if getattr(log, "status", "Completed") == "Completed"])
-    pending_logs_all = len([log for log in all_logs if getattr(log, "status", "") != "Completed"])
-    total_cost_all = sum(log.cost for log in all_logs)
-    
-    st.markdown("### 📊 Overall Summary")
-    col_ok1, col_ok2, col_ok3, col_ok4 = st.columns(4)
-    with col_ok1:
-        st.markdown(
-            "<div class='metric-card' style='text-align:center;'>"
-            f"<div class='metric-value'>{total_logs_all}</div>"
-            "<div class='metric-label'>Total Logs</div>"
-            "</div>",
-            unsafe_allow_html=True
-        )
-    with col_ok2:
-        st.markdown(
-            "<div class='metric-card' style='text-align:center;'>"
-            f"<div class='metric-value' style='color:#44CC44'>{completed_logs_all}</div>"
-            "<div class='metric-label'>Completed Logs</div>"
-            "</div>",
-            unsafe_allow_html=True
-        )
-    with col_ok3:
-        st.markdown(
-            "<div class='metric-card' style='text-align:center;'>"
-            f"<div class='metric-value' style='color:#FFAA00'>{pending_logs_all}</div>"
-            "<div class='metric-label'>Scheduled/Pending Logs</div>"
-            "</div>",
-            unsafe_allow_html=True
-        )
-    with col_ok4:
-        st.markdown(
-            "<div class='metric-card' style='text-align:center;'>"
-            f"<div class='metric-value' style='color:#4da6ff'>₹{total_cost_all:,.0f}</div>"
-            "<div class='metric-label'>Total Maintenance Cost</div>"
-            "</div>",
-            unsafe_allow_html=True
-        )
-    st.markdown("---")
-    
-    # Category Overview is removed - only showing Category Summary cards below
-    
     # ==================== 1. CATEGORY SUMMARY CARDS (clickable) ====================
     if all_category_summaries:
         st.markdown("### 📊 Category Summary")
@@ -3184,6 +3161,26 @@ def pre_route():
     if query_params.get("kpi_analytics"):
         st.session_state.page = "analytics"
         st.session_state.kpi_filter = None
+        query_params.clear()
+        return
+    
+    # Handle Analytics Category Chip clicks
+    achip = query_params.get("achip")
+    afilter = query_params.get("afilter")
+    if achip and afilter:
+        st.session_state.analytics_category = achip
+        st.session_state.analytics_chip_filter = afilter
+        st.session_state._from_analytics = True
+        if afilter in ("healthy", "warning", "critical"):
+            st.session_state.page = "analytics_machines"
+        elif afilter == "health":
+            st.session_state.page = "analytics_health_overview"
+        elif afilter == "alerts":
+            st.session_state.page = "alerts"
+        elif afilter == "maintenance":
+            st.session_state.maintenance_category = achip
+            st.session_state.maintenance_page = "category_detail"
+            st.session_state.page = "maintenance_logs"
         query_params.clear()
         return
     
