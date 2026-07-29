@@ -52,6 +52,198 @@ def get_db() -> DatabaseManager:
     return _db_manager
 
 
+def format_alert_reason(cause: str, machine_id: str = "", machine_type_name: str = "") -> str:
+    """Return a clear, human-readable alert reason without changing its meaning."""
+    text = (cause or "").strip()
+    if machine_id:
+        lowered = text.lower()
+        suffix = f" on {machine_id}".lower()
+        detected_suffix = f" detected on {machine_id}".lower()
+        if lowered.endswith(detected_suffix):
+            text = text[: -len(detected_suffix)].strip()
+        elif lowered.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+
+    while "detected detected" in text.lower():
+        text = text.replace("detected detected", "detected").replace("Detected detected", "Detected")
+    if text.lower().endswith(" detected"):
+        text = text[:-9].strip()
+    text = text.rstrip(".")
+
+    mid = machine_id or "the machine"
+    cause_key = text.lower()
+    descriptions = {
+        "compressor overload": f"The compressor on {mid} is overloaded and requires inspection.",
+        "cooling efficiency reduced": f"{mid} is cooling less efficiently than expected.",
+        "condenser overheating": f"The condenser in {mid} is overheating.",
+        "low refrigerant pressure": f"{mid} has low refrigerant pressure, which may affect cooling performance.",
+        "engine rpm instability": f"{mid} is experiencing unstable engine RPM.",
+        "low oil pressure": f"{mid} has low engine oil pressure.",
+        "bearing wear": f"The bearings in {mid} show signs of wear.",
+        "high drum vibration": f"{mid} is experiencing excessive drum vibration.",
+        "drum speed instability": f"The drum speed on {mid} is unstable.",
+        "motor current exceeded threshold": f"The motor on {mid} is drawing more current than expected.",
+        "water pump degradation": f"The water pump in {mid} is showing signs of reduced performance.",
+        "compressor overheating": f"The compressor in {mid} is overheating.",
+        "door seal leakage": f"The door seal on {mid} appears to be leaking.",
+        "evaporator icing": f"Ice is forming on the evaporator in {mid}.",
+        "fan motor failure": f"The fan motor in {mid} is not operating correctly.",
+        "coolant overheating": f"{mid} is running with overheated coolant.",
+        "timing belt wear": f"The timing belt in {mid} shows signs of wear.",
+        "spark plug degradation": f"The spark plugs in {mid} are showing reduced performance.",
+        "alternator overheating": f"The alternator in {mid} is overheating.",
+        "fuel pressure fluctuation": f"{mid} is experiencing fluctuating fuel pressure.",
+        "voltage instability": f"{mid} has unstable voltage output.",
+        "engine vibration increased": f"{mid} is showing higher engine vibration than normal.",
+        "load current exceeded safe range": f"The load current on {mid} is above the safe operating range.",
+        "sensor readings within normal range": f"Sensor readings for {mid} are currently within the normal range.",
+    }
+    if cause_key in descriptions:
+        return descriptions[cause_key]
+
+    if text:
+        return f"{mid} reported {text.lower()}."
+    equipment = machine_type_name or "equipment"
+    return f"{mid} reported a {equipment.lower()} performance issue."
+
+
+ALERT_EVENT_LIBRARY = {
+    MachineType.AIR_CONDITIONER: [
+        ("Compressor is drawing higher than normal current.", "Compressor overload"),
+        ("Cooling performance has dropped below the expected level.", "Cooling efficiency reduced"),
+        ("Refrigerant pressure is below the safe operating range.", "Low refrigerant pressure"),
+        ("Compressor temperature is higher than the recommended limit.", "Compressor overload"),
+        ("Indoor airflow has decreased significantly.", "Cooling efficiency reduced"),
+        ("Condenser fan speed is unstable.", "Fan motor failure"),
+        ("Compressor is cycling on and off too frequently.", "Compressor overload"),
+        ("Energy consumption is unusually high.", "Compressor overload"),
+        ("Suction pressure is fluctuating abnormally.", "Low refrigerant pressure"),
+        ("Unit vibration exceeds the normal operating limit.", "Fan motor failure"),
+    ],
+    MachineType.CAR_ENGINE: [
+        ("Engine temperature is higher than normal.", "Coolant overheating"),
+        ("Engine RPM is unstable.", "Engine RPM instability detected"),
+        ("Oil pressure has fallen below the safe limit.", "Low oil pressure"),
+        ("Coolant temperature is increasing rapidly.", "Coolant overheating"),
+        ("Engine vibration exceeds the normal range.", "Engine RPM instability detected"),
+        ("Fuel efficiency has decreased noticeably.", "Spark plug degradation"),
+        ("Ignition timing appears inconsistent.", "Timing belt wear"),
+        ("Abnormal knocking has been detected.", "Spark plug degradation"),
+        ("Exhaust temperature is unusually high.", "Coolant overheating"),
+        ("Sensor readings indicate reduced engine performance.", "Engine RPM instability detected"),
+    ],
+    MachineType.GENERATOR: [
+        ("Output voltage is fluctuating.", "Voltage instability"),
+        ("Generator temperature is above the recommended range.", "Alternator overheating"),
+        ("Fuel consumption is higher than expected.", "Fuel pressure fluctuation"),
+        ("Engine vibration exceeds safe limits.", "Engine vibration increased"),
+        ("Lubrication pressure is below normal.", "Engine vibration increased"),
+        ("Frequency output is unstable.", "Voltage instability"),
+        ("Battery charging performance has degraded.", "Alternator overheating"),
+        ("Alternator efficiency has decreased.", "Alternator overheating"),
+        ("Cooling system performance is reduced.", "Alternator overheating"),
+        ("Excessive mechanical vibration detected.", "Engine vibration increased"),
+    ],
+    MachineType.REFRIGERATOR: [
+        ("Cooling efficiency has decreased.", "Cooling efficiency reduced"),
+        ("Internal temperature is above the configured limit.", "Cooling efficiency reduced"),
+        ("Compressor runtime is unusually high.", "Compressor overheating"),
+        ("Door seal efficiency appears reduced.", "Door seal leakage"),
+        ("Frost accumulation exceeds the normal level.", "Evaporator icing"),
+        ("Condenser temperature is elevated.", "Compressor overheating"),
+        ("Compressor vibration is abnormal.", "Compressor overheating"),
+        ("Defrost cycle is taking longer than expected.", "Evaporator icing"),
+        ("Refrigerant pressure is outside the normal range.", "Low refrigerant pressure"),
+        ("Fan speed is unstable.", "Cooling efficiency reduced"),
+    ],
+    MachineType.WASHING_MACHINE: [
+        ("Drum vibration exceeds the normal limit.", "High drum vibration"),
+        ("Water filling is slower than expected.", "Water pump degradation"),
+        ("Spin speed is inconsistent.", "Drum speed instability detected"),
+        ("Motor current is higher than normal.", "Motor current exceeded threshold"),
+        ("Drain cycle is taking longer than expected.", "Water pump degradation"),
+        ("Water leakage has been detected.", "Water pump degradation"),
+        ("Bearing wear indicators are increasing.", "Bearing wear"),
+        ("Pump efficiency has decreased.", "Water pump degradation"),
+        ("Drum balance is unstable.", "High drum vibration"),
+        ("Excessive motor temperature detected.", "Motor current exceeded threshold"),
+    ],
+}
+
+
+def select_alert_event(
+    machine_type: MachineType,
+    machine_id: str = "",
+    preferred_cause: str = "",
+    recent_events: Optional[List[tuple]] = None,
+) -> tuple:
+    """Select a varied monitoring reason paired with a related root cause."""
+    events = list(ALERT_EVENT_LIBRARY.get(machine_type, []))
+    if not events:
+        return (format_alert_reason(preferred_cause or "Performance drift", machine_id), preferred_cause or "Performance drift")
+
+    recent_events = recent_events or []
+    preferred_cause = (preferred_cause or "").strip()
+    if preferred_cause and preferred_cause.lower().startswith("sensor readings"):
+        preferred_cause = ""
+
+    candidates = [
+        event for event in events
+        if not preferred_cause or event[1].lower() == preferred_cause.lower()
+    ]
+    if not candidates:
+        candidates = events
+
+    available = [event for event in candidates if event not in recent_events[-3:]]
+    if not available:
+        available = [event for event in events if event not in recent_events[-3:]]
+    if not available:
+        available = events
+
+    reason, cause = random.choice(available)
+    if machine_id and machine_id not in reason:
+        reason = f"{machine_id}: {reason}"
+    return reason, cause
+
+
+def infer_alert_cause_from_reason(reason: str) -> str:
+    """Infer the likely root cause from a monitoring-style alert reason."""
+    text = (reason or "").lower()
+    if ":" in text:
+        text = text.split(":", 1)[1].strip()
+
+    mappings = [
+        (("higher than normal current", "compressor is cycling", "energy consumption"), "Compressor overload"),
+        (("cooling performance", "cooling efficiency", "internal temperature", "fan speed"), "Cooling efficiency reduced"),
+        (("refrigerant pressure", "suction pressure"), "Low refrigerant pressure"),
+        (("compressor temperature", "compressor runtime", "condenser temperature", "compressor vibration"), "Compressor overheating"),
+        (("indoor airflow",), "Cooling efficiency reduced"),
+        (("condenser fan speed", "fan motor"), "Fan motor failure"),
+        (("unit vibration",), "Fan motor failure"),
+        (("engine temperature", "coolant temperature", "exhaust temperature", "overheated coolant"), "Coolant overheating"),
+        (("engine rpm", "reduced engine performance"), "Engine RPM instability detected"),
+        (("oil pressure", "lubrication pressure"), "Low oil pressure"),
+        (("engine vibration", "mechanical vibration"), "Engine vibration increased"),
+        (("fuel efficiency", "spark plugs", "knocking"), "Spark plug degradation"),
+        (("ignition timing", "timing belt"), "Timing belt wear"),
+        (("output voltage", "frequency output", "voltage output"), "Voltage instability"),
+        (("generator temperature", "battery charging", "alternator efficiency", "cooling system performance"), "Alternator overheating"),
+        (("fuel consumption", "fuel pressure"), "Fuel pressure fluctuation"),
+        (("door seal",), "Door seal leakage"),
+        (("frost accumulation", "defrost cycle"), "Evaporator icing"),
+        (("drum vibration", "drum balance"), "High drum vibration"),
+        (("water filling", "drain cycle", "water leakage", "pump efficiency"), "Water pump degradation"),
+        (("spin speed", "drum speed"), "Drum speed instability detected"),
+        (("motor current", "motor temperature"), "Motor current exceeded threshold"),
+        (("bearing wear", "bearings"), "Bearing wear"),
+        (("load current",), "Load current exceeded safe range"),
+    ]
+    for needles, cause in mappings:
+        if any(needle in text for needle in needles):
+            return cause
+    return "Component degradation over time"
+
+
 # ==================== ENTERPRISE DATA STORE (forward declaration) ====================
 # We need a reliable way to get the store singleton without circular imports
 _data_store_instance = None
@@ -228,11 +420,23 @@ class WorkOrderService:
         maintenance_type = self._get_maintenance_type_for_work_order(wo, machine)
         maintenance_date = self._get_realistic_maintenance_date(machine)
 
+        alert_reason = ""
+        cause = ""
+        if wo.alert_id:
+            alert = get_db().get_alert(wo.alert_id)
+            if alert:
+                alert_reason = alert.reason
+                cause = infer_alert_cause_from_reason(alert.reason)
+        if not cause and machine:
+            cause = machine.cause
+        if not cause:
+            cause = wo.issue_description or wo.title
+
         store.maintenance_log_service.add_log(
             machine_id=wo.machine_id,
             technician=wo.assigned_technician,
             maintenance_type=maintenance_type,
-            issue=wo.issue_description or wo.title,
+            issue=cause,
             action_taken=self._get_realistic_maintenance_action(wo, machine),
             cost=0.0,
             duration_hours=2.0,
@@ -240,9 +444,7 @@ class WorkOrderService:
             work_order_id=wo.work_order_id,
             machine_name=machine_name,
             category=category,
-            description=(
-                f"{maintenance_type.value} maintenance scheduled automatically after AI prediction.\nIssue: {wo.issue_description or ''}"
-            ),
+            description=alert_reason or wo.description or wo.issue_description or wo.title,
             start_time=maintenance_date,
             end_time=None,
             downtime_hours=0.0,
@@ -545,7 +747,14 @@ class WorkOrderService:
 
         # Generate realistic maintenance values with unique timestamps
         from simulation import _get_realistic_maintenance_cost
-        cause_text = wo.issue_description or wo.title or "General maintenance"
+        alert_reason = ""
+        root_cause = ""
+        if wo.alert_id:
+            alert = get_db().get_alert(wo.alert_id)
+            if alert:
+                alert_reason = alert.reason
+                root_cause = infer_alert_cause_from_reason(alert.reason)
+        cause_text = root_cause or wo.issue_description or wo.title or "General maintenance"
         maintenance_cost = _get_realistic_maintenance_cost(cause_text, category)
         actual_duration = round(random.uniform(1, 4), 1)
         downtime = round(random.uniform(0.5, 2), 1)
@@ -602,12 +811,13 @@ class WorkOrderService:
             existing_log.log_id,
             status="Completed",
             maintenance_type=maintenance_type,
+            issue=cause_text,
             action_taken=action_taken,
             parts_replaced=parts_replaced,
             cost=maintenance_cost,
             duration_hours=actual_duration,
             remarks=remarks,
-            description=wo.description,
+            description=alert_reason or existing_log.description or wo.description,
             start_time=start_time,
             end_time=end_time,
             downtime_hours=downtime,
@@ -824,7 +1034,12 @@ class MaintenanceLogService:
                     minutes=random.randint(0, 59)
                 )
             maintenance_type = random.choice([MaintenanceType.INSPECTION, MaintenanceType.PREVENTIVE, MaintenanceType.CORRECTIVE, MaintenanceType.REPLACEMENT])
-            issue = self._issue_for_machine(machine, idx)
+            preferred_cause = self._issue_for_machine(machine, idx)
+            reason, issue = select_alert_event(
+                machine.machine_type,
+                machine.machine_id,
+                preferred_cause=preferred_cause,
+            )
             action = self._action_for_machine(machine, issue)
             log = MaintenanceLog(
                 log_id=self._generate_id(),
@@ -840,7 +1055,7 @@ class MaintenanceLogService:
                 remarks="",
                 machine_name=machine.name,
                 category=machine.machine_category,
-                description=action,
+                description=reason,
                 status="Completed",
                 created_date=maintenance_date,
             )
@@ -1009,6 +1224,23 @@ class AlertService:
             return now - timedelta(days=int(min(180, max(7, machine.operating_hours / 8))))
         return now
 
+    def _get_open_alert_timestamp(self) -> datetime:
+        """Create a realistic timestamp for an open alert on the current date."""
+        now = datetime.now()
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        minutes_elapsed_today = max(1, int((now - start_of_day).total_seconds() // 60))
+        window_minutes = min(minutes_elapsed_today, random.randint(180, 420))
+        offset_minutes = random.randint(0, window_minutes)
+        offset_seconds = random.randint(0, 59)
+        timestamp = now - timedelta(minutes=offset_minutes, seconds=offset_seconds)
+        if timestamp.date() != now.date():
+            timestamp = start_of_day + timedelta(
+                minutes=random.randint(0, minutes_elapsed_today),
+                seconds=random.randint(0, 59),
+                microseconds=random.randint(0, 999999)
+            )
+        return timestamp.replace(microsecond=random.randint(0, 999999))
+
     def create_alert(self, machine_id: str, severity: AlertSeverity,
                      reason: str, recommended_action: str, timestamp: Optional[datetime] = None) -> Alert:
         """Create a new alert.
@@ -1027,7 +1259,7 @@ class AlertService:
             machine_id=machine_id,
             severity=severity,
             reason=reason,
-            timestamp=timestamp or datetime.now(),
+            timestamp=timestamp or self._get_open_alert_timestamp(),
             recommended_action=recommended_action
         )
         db = get_db()
@@ -1093,16 +1325,16 @@ class AlertService:
             if machine.status == MachineStatus.CRITICAL
             else "Schedule preventive maintenance"
         )
-        if machine.cause:
-            reason = machine.cause if machine.cause.endswith('.') else f"{machine.cause} detected"
-        else:
-            reason = (
-                f"{machine_type_name} critical fault detected"
-                if machine.status == MachineStatus.CRITICAL
-                else f"{machine_type_name} performance drift detected"
-            )
-        if machine.machine_id:
-            reason = f"{reason} on {machine.machine_id}"
+        recent_alert_events = list(getattr(machine, "recent_alert_events", []))
+        reason, selected_cause = select_alert_event(
+            machine.machine_type,
+            machine.machine_id,
+            preferred_cause=machine.cause,
+            recent_events=recent_alert_events
+        )
+        machine.cause = selected_cause
+        recent_alert_events.append((reason.replace(f"{machine.machine_id}: ", ""), selected_cause))
+        machine.recent_alert_events = recent_alert_events[-4:]
 
         # Check existing open alerts for this machine
         existing = self.get_active_alert_by_machine(machine.machine_id)
@@ -1112,27 +1344,27 @@ class AlertService:
                 existing.severity = AlertSeverity.CRITICAL
                 existing.reason = reason
                 existing.recommended_action = recommended_action
-                existing.timestamp = datetime.now()
+                existing.timestamp = self._get_open_alert_timestamp()
                 db.update_alert(existing)
             elif machine.status == MachineStatus.WARNING and existing.severity == AlertSeverity.CRITICAL:
                 # Downgrade CRITICAL to WARNING (if machine went from CRITICAL to WARNING)
                 existing.severity = AlertSeverity.WARNING
                 existing.reason = reason
                 existing.recommended_action = recommended_action
-                existing.timestamp = datetime.now()
+                existing.timestamp = self._get_open_alert_timestamp()
                 db.update_alert(existing)
             elif existing.severity != expected_severity:
                 # Update severity/reason if different
                 existing.severity = expected_severity
                 existing.reason = reason
                 existing.recommended_action = recommended_action
-                existing.timestamp = datetime.now()
+                existing.timestamp = self._get_open_alert_timestamp()
                 db.update_alert(existing)
             else:
                 # Same severity - just update timestamp and details
                 existing.reason = reason
                 existing.recommended_action = recommended_action
-                existing.timestamp = datetime.now()
+                existing.timestamp = self._get_open_alert_timestamp()
                 db.update_alert(existing)
             return existing
 
@@ -1143,7 +1375,7 @@ class AlertService:
             severity=expected_severity,
             reason=reason,
             recommended_action=recommended_action,
-            timestamp=datetime.now()
+            timestamp=self._get_open_alert_timestamp()
         )
 
     def acknowledge_alert(self, alert_id: str, acknowledged_by: str) -> bool:
@@ -1331,7 +1563,13 @@ class SynchronizationEngine:
         # Step 7: Recalculate status AFTER work order changes (maintenance may have improved health)
         self._recalculate_status(machine)
         
-        # Step 8: Persist machine changes
+        # Step 8: Reconcile alerts with the final machine status after all recalculation.
+        if machine.status == MachineStatus.NORMAL:
+            data_store.alert_service.close_all_open_alerts_by_machine(machine.machine_id)
+        elif machine.status in (MachineStatus.WARNING, MachineStatus.CRITICAL):
+            data_store.alert_service.auto_create_from_machine_status(machine)
+
+        # Step 9: Persist machine changes
         db.update_machine(machine)
     
     def _close_open_work_orders(self, machine: MachineInfo) -> int:

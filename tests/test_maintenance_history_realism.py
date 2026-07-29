@@ -51,6 +51,19 @@ class MaintenanceHistoryRealismTests(unittest.TestCase):
             for log in logs)
         )
 
+        open_alerts = [
+            alert for alert in store.alert_service.get_alerts_by_machine(machine.machine_id)
+            if alert.status == "Open"
+        ]
+        self.assertEqual(len(open_alerts), 1)
+        linked_log = next(
+            (log for log in logs if log.work_order_id == latest_wo.work_order_id),
+            None
+        )
+        self.assertIsNotNone(linked_log)
+        self.assertEqual(open_alerts[0].reason, linked_log.description)
+        self.assertNotEqual(linked_log.issue, linked_log.description)
+
     def test_historical_logs_are_seeded_from_purchase_date_for_older_machines(self):
         simulator = EnterpriseSimulator()
         machine = simulator.get_machine("WM-008")

@@ -49,6 +49,18 @@ ACTIVE_MACHINE_TYPES = {
 
 ACTIVE_MACHINE_ID_PATTERN = r"(REF-\d+|WM-\d+|AC-\d+|GEN-\d+|ENG-\d+)"
 
+CONDITION_SYNONYMS = {
+    MachineStatus.NORMAL: [
+        "normal", "healthy", "good", "running normally", "operating normally"
+    ],
+    MachineStatus.WARNING: [
+        "warning", "needs attention", "need attention", "attention"
+    ],
+    MachineStatus.CRITICAL: [
+        "critical", "urgent", "high risk", "high-risk"
+    ],
+}
+
 
 class EnterpriseCopilot:
     """
@@ -82,6 +94,8 @@ class EnterpriseCopilot:
             return self._answer_why_unhealthy(q)
         elif self._is_highest_vibration(q):
             return self._answer_highest_vibration()
+        elif self._is_machine_condition_list_query(q):
+            return self._answer_machine_condition_list(q)
         elif self._is_show_critical(q):
             return self._answer_show_critical()
         elif self._is_compare_machines(q):
@@ -148,6 +162,50 @@ class EnterpriseCopilot:
                     r"list.*critical", r"which.*critical"]
         return any(re.search(p, q) for p in patterns)
 
+    def _extract_condition_status(self, q: str) -> Optional[MachineStatus]:
+        """Map condition-related wording to machine status."""
+        for status, synonyms in CONDITION_SYNONYMS.items():
+            if any(term in q for term in synonyms):
+                return status
+        return None
+
+    def _extract_category_filter(self, q: str) -> Optional[str]:
+        """Find a category mentioned in the question using live category names."""
+        normalized_q = re.sub(r"\s+", " ", q.lower()).strip()
+        factories = self.simulator.get_all_factories()
+        category_candidates = []
+
+        for factory_id, factory_info in factories.items():
+            category_name = factory_info.get("name", factory_id)
+            category_candidates.extend([factory_id, category_name])
+
+        category_candidates.extend(ACTIVE_MACHINE_TYPES.keys())
+
+        for candidate in sorted(set(category_candidates), key=len, reverse=True):
+            normalized = str(candidate).lower().replace("_", " ").strip()
+            if normalized and re.search(rf"\b{re.escape(normalized)}\b", normalized_q):
+                for factory_id, factory_info in factories.items():
+                    category_name = factory_info.get("name", factory_id)
+                    if normalized in {
+                        str(factory_id).lower().replace("_", " ").strip(),
+                        str(category_name).lower().replace("_", " ").strip(),
+                    }:
+                        return category_name
+                if candidate in ACTIVE_MACHINE_TYPES:
+                    return ACTIVE_MACHINE_TYPES[candidate].value
+
+        return None
+
+    def _is_machine_condition_list_query(self, q: str) -> bool:
+        """Detect requests to list machines by status, optionally by category."""
+        if not self._extract_condition_status(q):
+            return False
+        list_terms = [
+            "machine", "machines", "show", "list", "which", "what are",
+            "what's", "give me", "display"
+        ]
+        return any(term in q for term in list_terms)
+
     def _is_compare_machines(self, q: str) -> bool:
         return bool(re.search(r"compare (.*) and (.*)", q))
 
@@ -209,6 +267,53 @@ class EnterpriseCopilot:
         return None
 
     # ==================== ANSWER GENERATORS ====================
+
+    def _answer_machine_condition_list(self, q: str) -> str:
+        """List live machines filtered by condition and optional category."""
+        status = self._extract_condition_status(q)
+        if not status:
+            return self._answer_overall_status()
+
+        category_filter = self._extract_category_filter(q)
+        machines = self.simulator.get_all_machines()
+        if category_filter:
+            machines = [
+                machine for machine in machines
+                if machine.machine_category.lower() == category_filter.lower()
+            ]
+
+        filtered = [
+            machine for machine in machines
+            if machine.status == status
+        ]
+        filtered.sort(key=lambda machine: machine.machine_id)
+
+        status_title = {
+            MachineStatus.NORMAL: "Normal Machines",
+            MachineStatus.WARNING: "Warning Machines",
+            MachineStatus.CRITICAL: "Critical Machines",
+        }.get(status, f"{status.value.title()} Machines")
+        if category_filter:
+            status_title = f"{category_filter} {status_title}"
+
+        if not filtered:
+            return (
+                f"## {status_title}\n\n"
+                f"No machines are currently in {status.value} condition."
+            )
+
+        result = f"## {status_title} ({len(filtered)})\n\n"
+        for machine in filtered:
+            result += (
+                f"- **{machine.machine_id} - {machine.name}** | "
+                f"Category: {machine.machine_category} | "
+                f"Health Score: {machine.health_score:.1f}% | "
+                f"Failure Probability: {machine.failure_probability * 100:.1f}% | "
+                f"Current Status: {machine.status.value}\n"
+            )
+
+        result += f"\n**Total {status_title}: {len(filtered)}**"
+        return result
 
     def _answer_machine_question(self, machine_id: str, question: str) -> str:
         """Route single-machine questions to existing chatbot."""

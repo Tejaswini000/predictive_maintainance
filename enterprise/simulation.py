@@ -46,6 +46,7 @@ from models import (
     get_machine_type_sensors, get_sensor_list
 )
 from database import DatabaseManager
+from services import format_alert_reason, select_alert_event
 from data_loader import get_machine_data, load_machines_from_excel, MACHINES_XLSX_PATH
 from ml_model import get_predictor, predict_machine_status
 import logging
@@ -1062,13 +1063,23 @@ class EnterpriseSimulator:
                 severity = AlertSeverity.WARNING
                 before_health = random.uniform(50, 74) if severity == AlertSeverity.WARNING else random.uniform(20, 49)
                 
+                recent_alert_events = list(getattr(machine, "recent_alert_events", []))
+                reason, cause = select_alert_event(
+                    machine.machine_type,
+                    machine.machine_id,
+                    preferred_cause=cause,
+                    recent_events=recent_alert_events
+                )
+                recent_alert_events.append((reason.replace(f"{machine.machine_id}: ", ""), cause))
+                machine.recent_alert_events = recent_alert_events[-4:]
+
                 # Create alert record in database
                 from models import Alert
                 db_alert = Alert(
                     alert_id=f"HIST-ALT-{machine_id}-{cycle_idx}-{random.randint(1000, 9999)}",
                     machine_id=machine_id,
                     severity=severity,
-                    reason=f"{cause} on {machine.machine_id}",
+                    reason=reason,
                     timestamp=warning_date,
                     recommended_action="Schedule maintenance",
                     status="Closed",
@@ -1134,7 +1145,7 @@ class EnterpriseSimulator:
                     work_order_id=wo.work_order_id,
                     machine_name=machine.name,
                     category=machine.machine_category,
-                    description=f"Work Order {wo.work_order_id}: {wo_title}\nAlert: {db_alert.alert_id}\nCause: {cause}\nAction: {maintenance_action}",
+                    description=reason,
                     start_time=wo_date,
                     end_time=maint_date,
                     downtime_hours=downtime,

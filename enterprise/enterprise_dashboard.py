@@ -10,6 +10,9 @@ import io
 import csv
 import random
 import re
+import zipfile
+import textwrap
+from urllib.parse import quote
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
@@ -25,7 +28,7 @@ from models import (
 )
 from simulation import EnterpriseSimulator, FAILURE_CAUSE_LIBRARY, MAINTENANCE_ACTION_LIBRARY
 from analytics import AnalyticsEngine, get_analytics_engine, TrendAnalyzer
-from services import get_data_store, WorkOrderService, AlertService
+from services import get_data_store, WorkOrderService, AlertService, infer_alert_cause_from_reason
 from reports import ReportGenerator, get_report_generator
 from enterprise_chatbot import EnterpriseCopilot
 from llm_client import OpenRouterClient
@@ -124,34 +127,209 @@ st.markdown("""
         background: #4da6ff;
         color: #ffffff !important;
     }
-    /* Style Streamlit buttons to look exactly like KPI metric cards */
+    /* Dashboard KPI cards: fixed visual dimensions while preserving button navigation */
+    .st-key-dashboard_kpi_cards div[data-testid="column"] {
+        min-width: 0 !important;
+    }
+    .st-key-dashboard_kpi_cards .stButton,
+    .st-key-dashboard_kpi_cards div[data-testid="stButton"] {
+        width: 100% !important;
+        height: 112px !important;
+        margin: 0 !important;
+    }
+    .st-key-dashboard_kpi_cards .stButton button,
+    .st-key-dashboard_kpi_cards div[data-testid="stButton"] button,
     .stButton button[kpi-card="true"] {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%) !important;
         border-radius: 12px !important;
-        padding: 18px 18px !important;
+        padding: 14px 10px !important;
         border: 1px solid #2a2a4a !important;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important;
         color: inherit !important;
         font-family: inherit !important;
-        font-size: inherit !important;
-        line-height: normal !important;
+        font-size: 1rem !important;
+        line-height: 1.25 !important;
         text-align: center !important;
         transition: all 0.2s ease !important;
-        min-height: 0 !important;
-        height: auto !important;
+        min-height: 112px !important;
+        height: 112px !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
     }
+    .st-key-dashboard_kpi_cards .stButton button:hover,
+    .st-key-dashboard_kpi_cards div[data-testid="stButton"] button:hover,
     .stButton button[kpi-card="true"]:hover {
         border-color: #4da6ff !important;
         box-shadow: 0 4px 12px rgba(77, 166, 255, 0.3) !important;
     }
+    .st-key-dashboard_kpi_cards .stButton button p,
+    .st-key-dashboard_kpi_cards div[data-testid="stButton"] button p,
     .stButton button[kpi-card="true"] p {
-        font-size: inherit !important;
-        font-weight: inherit !important;
+        width: 100% !important;
+        font-size: 1rem !important;
+        font-weight: 700 !important;
         color: inherit !important;
         margin: 0 !important;
-        line-height: normal !important;
-        white-space: pre-wrap !important;
+        line-height: 1.25 !important;
+        white-space: pre-line !important;
         text-align: center !important;
+        font-variant-numeric: tabular-nums !important;
+        overflow-wrap: anywhere !important;
+    }
+    .st-key-dashboard_kpi_cards .st-key-kpi_cat,
+    .st-key-dashboard_kpi_cards .st-key-kpi_cat button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_cat button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_cat .stButton button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_cat .stButton button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_cat div[data-testid="stButton"] button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_cat div[data-testid="stButton"] button *,
+    .st-key-kpi_cat .stButton button,
+    .st-key-kpi_cat .stButton button *,
+    .st-key-kpi_cat .stButton button p,
+    .st-key-kpi_cat div[data-testid="stButton"] button,
+    .st-key-kpi_cat div[data-testid="stButton"] button *,
+    .st-key-kpi_cat div[data-testid="stButton"] button p,
+    .st-key-kpi_cat button,
+    .st-key-kpi_cat button *,
+    .st-key-kpi_cat h1,
+    .st-key-kpi_cat h2,
+    .st-key-kpi_cat h3,
+    .st-key-kpi_cat h4,
+    .st-key-kpi_cat p,
+    .st-key-kpi_cat span,
+    .st-key-kpi_cat div {
+        color: #F4B400 !important;
+        font-weight: 700;
+    }
+    .st-key-dashboard_kpi_cards .st-key-kpi_mach,
+    .st-key-dashboard_kpi_cards .st-key-kpi_mach button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_mach button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_mach .stButton button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_mach .stButton button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_mach div[data-testid="stButton"] button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_mach div[data-testid="stButton"] button *,
+    .st-key-kpi_mach .stButton button,
+    .st-key-kpi_mach .stButton button *,
+    .st-key-kpi_mach .stButton button p,
+    .st-key-kpi_mach div[data-testid="stButton"] button,
+    .st-key-kpi_mach div[data-testid="stButton"] button *,
+    .st-key-kpi_mach div[data-testid="stButton"] button p,
+    .st-key-kpi_mach button,
+    .st-key-kpi_mach button *,
+    .st-key-kpi_mach h1,
+    .st-key-kpi_mach h2,
+    .st-key-kpi_mach h3,
+    .st-key-kpi_mach h4,
+    .st-key-kpi_mach p,
+    .st-key-kpi_mach span,
+    .st-key-kpi_mach div {
+        color: #B39DDB !important;
+        font-weight: 700;
+    }
+    .st-key-dashboard_kpi_cards .st-key-kpi_heal,
+    .st-key-dashboard_kpi_cards .st-key-kpi_heal button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_heal button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_heal .stButton button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_heal .stButton button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_heal div[data-testid="stButton"] button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_heal div[data-testid="stButton"] button *,
+    .st-key-kpi_heal .stButton button,
+    .st-key-kpi_heal .stButton button *,
+    .st-key-kpi_heal .stButton button p,
+    .st-key-kpi_heal div[data-testid="stButton"] button,
+    .st-key-kpi_heal div[data-testid="stButton"] button *,
+    .st-key-kpi_heal div[data-testid="stButton"] button p,
+    .st-key-kpi_heal button,
+    .st-key-kpi_heal button *,
+    .st-key-kpi_heal h1,
+    .st-key-kpi_heal h2,
+    .st-key-kpi_heal h3,
+    .st-key-kpi_heal h4,
+    .st-key-kpi_heal p,
+    .st-key-kpi_heal span,
+    .st-key-kpi_heal div {
+        color: #22C55E !important;
+        font-weight: 700;
+    }
+    .st-key-dashboard_kpi_cards .st-key-kpi_warn,
+    .st-key-dashboard_kpi_cards .st-key-kpi_warn button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_warn button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_warn .stButton button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_warn .stButton button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_warn div[data-testid="stButton"] button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_warn div[data-testid="stButton"] button *,
+    .st-key-kpi_warn .stButton button,
+    .st-key-kpi_warn .stButton button *,
+    .st-key-kpi_warn .stButton button p,
+    .st-key-kpi_warn div[data-testid="stButton"] button,
+    .st-key-kpi_warn div[data-testid="stButton"] button *,
+    .st-key-kpi_warn div[data-testid="stButton"] button p,
+    .st-key-kpi_warn button,
+    .st-key-kpi_warn button *,
+    .st-key-kpi_warn h1,
+    .st-key-kpi_warn h2,
+    .st-key-kpi_warn h3,
+    .st-key-kpi_warn h4,
+    .st-key-kpi_warn p,
+    .st-key-kpi_warn span,
+    .st-key-kpi_warn div {
+        color: #F59E0B !important;
+        font-weight: 700;
+    }
+    .st-key-dashboard_kpi_cards .st-key-kpi_crit,
+    .st-key-dashboard_kpi_cards .st-key-kpi_crit button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_crit button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_crit .stButton button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_crit .stButton button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_crit div[data-testid="stButton"] button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_crit div[data-testid="stButton"] button *,
+    .st-key-kpi_crit .stButton button,
+    .st-key-kpi_crit .stButton button *,
+    .st-key-kpi_crit .stButton button p,
+    .st-key-kpi_crit div[data-testid="stButton"] button,
+    .st-key-kpi_crit div[data-testid="stButton"] button *,
+    .st-key-kpi_crit div[data-testid="stButton"] button p,
+    .st-key-kpi_crit button,
+    .st-key-kpi_crit button *,
+    .st-key-kpi_crit h1,
+    .st-key-kpi_crit h2,
+    .st-key-kpi_crit h3,
+    .st-key-kpi_crit h4,
+    .st-key-kpi_crit p,
+    .st-key-kpi_crit span,
+    .st-key-kpi_crit div {
+        color: #EF4444 !important;
+        font-weight: 700;
+    }
+    .st-key-dashboard_kpi_cards .st-key-kpi_avg,
+    .st-key-dashboard_kpi_cards .st-key-kpi_avg button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_avg button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_avg .stButton button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_avg .stButton button *,
+    .st-key-dashboard_kpi_cards .st-key-kpi_avg div[data-testid="stButton"] button,
+    .st-key-dashboard_kpi_cards .st-key-kpi_avg div[data-testid="stButton"] button *,
+    .st-key-kpi_avg .stButton button,
+    .st-key-kpi_avg .stButton button *,
+    .st-key-kpi_avg .stButton button p,
+    .st-key-kpi_avg div[data-testid="stButton"] button,
+    .st-key-kpi_avg div[data-testid="stButton"] button *,
+    .st-key-kpi_avg div[data-testid="stButton"] button p,
+    .st-key-kpi_avg button,
+    .st-key-kpi_avg button *,
+    .st-key-kpi_avg h1,
+    .st-key-kpi_avg h2,
+    .st-key-kpi_avg h3,
+    .st-key-kpi_avg h4,
+    .st-key-kpi_avg p,
+    .st-key-kpi_avg span,
+    .st-key-kpi_avg div {
+        color: #22C55E !important;
+        font-weight: 700;
     }
     /* Category card styling for maintenance logs */
     .category-card {
@@ -171,8 +349,8 @@ st.markdown("""
     }
     .category-card-title {
         font-size: 1.1rem;
-        font-weight: 600;
-        color: #fff;
+        font-weight: 700;
+        color: #FFFFFF;
         margin-bottom: 8px;
     }
     .category-card-stat {
@@ -189,6 +367,33 @@ st.markdown("""
         color: #4da6ff;
         font-weight: 600;
         margin-top: 6px;
+    }
+    .machine-category-card h3,
+    .machine-category-card .machine-category-name {
+        color: #FFFFFF !important;
+        font-weight: 700;
+    }
+    .machine-category-card .machine-category-count,
+    .machine-category-card .machine-category-count strong {
+        color: #FFFFFF !important;
+        font-weight: 600;
+    }
+    .machine-category-card .machine-category-health {
+        color: #FFFFFF !important;
+        font-weight: 700;
+    }
+    .machine-category-card .machine-category-health strong,
+    .machine-category-card .machine-category-healthy {
+        color: #22C55E !important;
+        font-weight: 700;
+    }
+    .machine-category-card .machine-category-warning {
+        color: #F59E0B !important;
+        font-weight: 700;
+    }
+    .machine-category-card .machine-category-critical {
+        color: #EF4444 !important;
+        font-weight: 700;
     }
     .summary-section {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -255,6 +460,14 @@ MACHINE_TYPE_COLORS = {
     "Car Engine": "#9b59b6"
 }
 
+
+def format_recent_alert_id_for_display(alert_id: str) -> str:
+    """Display dashboard alert IDs as ALT-<MachinePrefix>-<Number> without generated suffixes."""
+    text = str(alert_id or "").strip()
+    match = re.match(r"^(ALT-[A-Z]+-\d+)(?:-.*)?$", text)
+    return match.group(1) if match else text.rstrip("-")
+
+
 # ==================== NAVIGATION HELPER ====================
 
 def navigate_to_machine(machine_id: str):
@@ -312,6 +525,14 @@ def init_session_state():
         st.session_state.analytics_chip_filter = None
     if "_from_analytics" not in st.session_state:
         st.session_state._from_analytics = False
+    if "_analytics_badge_target" not in st.session_state:
+        st.session_state._analytics_badge_target = None
+    if "_analytics_badge_source" not in st.session_state:
+        st.session_state._analytics_badge_source = None
+    if "_analytics_badge_route_key" not in st.session_state:
+        st.session_state._analytics_badge_route_key = None
+    if "data_consistency_checked" not in st.session_state:
+        st.session_state.data_consistency_checked = False
 
 init_session_state()
 
@@ -342,6 +563,37 @@ analytics = get_analytics()
 data_store = get_data()
 report_generator = get_reports()
 copilot = get_copilot()
+
+
+def ensure_data_consistency_once():
+    """Repair stale derived records once so every page reads the same machine-state truth."""
+    if st.session_state.get("data_consistency_checked"):
+        return
+    from services import get_sync_engine
+    sync_engine = get_sync_engine()
+    validation = sync_engine.validate_consistency()
+    if not validation["consistent"]:
+        sync_engine.auto_repair()
+    st.session_state.data_consistency_checked = True
+
+
+def return_to_analytics_from_chip():
+    """Return from an Analytics chip destination to the Analytics summary page."""
+    st.session_state.page = "analytics"
+    st.session_state._from_analytics = False
+    st.session_state._analytics_badge_source = None
+    st.session_state._analytics_badge_target = None
+    st.session_state._analytics_badge_route_key = None
+    st.query_params.clear()
+    st.rerun()
+
+
+def came_from_analytics_chip(target_page: str) -> bool:
+    """Check whether the current page was opened from an Analytics category chip."""
+    return (
+        st.session_state.get("_analytics_badge_source") == "analytics"
+        and st.session_state.get("_analytics_badge_target") == target_page
+    )
 
 # ==================== SIDEBAR ====================
 
@@ -467,8 +719,8 @@ def render_dashboard():
                 <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                             border-radius: 12px; padding: 15px; margin: 8px 0;
                             border-left: 4px solid {status_color};'>
-                    <h3 style='margin:0;'><a href="?navigate={machine.machine_id}" style="color:inherit;text-decoration:none;">{machine.machine_id}</a></h3>
-                    <p style='margin:2px 0; color: #aaa;'>{machine.name}</p>
+                    <h3 style='margin:0; color:#FFFFFF; font-weight:700;'><a href="?navigate={machine.machine_id}" style="color:#FFFFFF;text-decoration:none;font-weight:700;">{machine.machine_id}</a></h3>
+                    <p style='margin:2px 0; color:#FFFFFF; font-weight:700;'>{machine.name}</p>
                     <p style='margin:2px 0; color: #ddd;'>{machine.manufacturer}</p>
                     <p style='margin:2px 0; font-size: 0.85rem; color: #888;'>
                         Health: {machine.health_score:.1f}% | Status: {machine.status.value}
@@ -477,55 +729,56 @@ def render_dashboard():
                 """, unsafe_allow_html=True)
 
     # === KPI METRICS ===
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    
-    with col1:
-        categories_value = stats.get('total_categories', stats['total_factories'])
-        categories_label = f'🏷️ Categories\n{categories_value}'
-        if st.button(f"{categories_value}\n\n🏷️ Categories", key="kpi_cat", use_container_width=True):
-            st.session_state.page = "kpi_categories"
-            st.session_state.selected_factory = None
-            st.session_state.selected_machine = None
-            st.session_state.kpi_filter = None
-            st.rerun()
-    
-    with col2:
-        if st.button(f'{stats["total_machines"]}\n\n⚙️ Total Machines', key="kpi_mach", use_container_width=True):
-            st.session_state.page = "kpi_machines"
-            st.session_state.selected_factory = None
-            st.session_state.selected_machine = None
-            st.session_state.kpi_filter = "all"
-            st.rerun()
-    
-    with col3:
-        if st.button(f'{stats["healthy_count"]}\n\n✅ Healthy', key="kpi_heal", use_container_width=True):
-            st.session_state.page = "kpi_healthy"
-            st.session_state.selected_factory = None
-            st.session_state.selected_machine = None
-            st.session_state.kpi_filter = "healthy"
-            st.rerun()
-    
-    with col4:
-        if st.button(f'{stats["warning_count"]}\n\n⚠️ Warning', key="kpi_warn", use_container_width=True):
-            st.session_state.page = "kpi_warning"
-            st.session_state.selected_factory = None
-            st.session_state.selected_machine = None
-            st.session_state.kpi_filter = "warning"
-            st.rerun()
-    
-    with col5:
-        if st.button(f'{stats["critical_count"]}\n\n🔴 Critical', key="kpi_crit", use_container_width=True):
-            st.session_state.page = "kpi_critical"
-            st.session_state.selected_factory = None
-            st.session_state.selected_machine = None
-            st.session_state.kpi_filter = "critical"
-            st.rerun()
-    
-    with col6:
-        if st.button(f'{stats["average_health"]}%\n\n💚 Avg Health', key="kpi_avg", use_container_width=True):
-            st.session_state.page = "analytics"
-            st.session_state.kpi_filter = None
-            st.rerun()
+    with st.container(key="dashboard_kpi_cards"):
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        
+        with col1:
+            categories_value = stats.get('total_categories', stats['total_factories'])
+            categories_label = f'🏷️ Categories\n{categories_value}'
+            if st.button(f"{categories_value}\n\n🏷️ Categories", key="kpi_cat", use_container_width=True):
+                st.session_state.page = "kpi_categories"
+                st.session_state.selected_factory = None
+                st.session_state.selected_machine = None
+                st.session_state.kpi_filter = None
+                st.rerun()
+        
+        with col2:
+            if st.button(f'{stats["total_machines"]}\n\n⚙️ Total Machines', key="kpi_mach", use_container_width=True):
+                st.session_state.page = "kpi_machines"
+                st.session_state.selected_factory = None
+                st.session_state.selected_machine = None
+                st.session_state.kpi_filter = "all"
+                st.rerun()
+        
+        with col3:
+            if st.button(f'{stats["healthy_count"]}\n\n✅ Healthy', key="kpi_heal", use_container_width=True):
+                st.session_state.page = "kpi_healthy"
+                st.session_state.selected_factory = None
+                st.session_state.selected_machine = None
+                st.session_state.kpi_filter = "healthy"
+                st.rerun()
+        
+        with col4:
+            if st.button(f'{stats["warning_count"]}\n\n⚠️ Warning', key="kpi_warn", use_container_width=True):
+                st.session_state.page = "kpi_warning"
+                st.session_state.selected_factory = None
+                st.session_state.selected_machine = None
+                st.session_state.kpi_filter = "warning"
+                st.rerun()
+        
+        with col5:
+            if st.button(f'{stats["critical_count"]}\n\n🔴 Critical', key="kpi_crit", use_container_width=True):
+                st.session_state.page = "kpi_critical"
+                st.session_state.selected_factory = None
+                st.session_state.selected_machine = None
+                st.session_state.kpi_filter = "critical"
+                st.rerun()
+        
+        with col6:
+            if st.button(f'{stats["average_health"]}%\n\n💚 Avg Health', key="kpi_avg", use_container_width=True):
+                st.session_state.page = "analytics"
+                st.session_state.kpi_filter = None
+                st.rerun()
     
     st.markdown("---")
     
@@ -627,7 +880,7 @@ def render_dashboard():
             condition_color = {"CRITICAL": "#FF4444", "WARNING": "#FFAA00", "INFO": "#4488FF"}.get(condition, "#888")
             alert_rows.append({
                 "Machine ID": a.machine_id,
-                "Alert ID": a.alert_id[:12],
+                "Alert ID": format_recent_alert_id_for_display(a.alert_id),
                 "Description": a.reason[:60],
                 "Date": a.timestamp.strftime('%Y-%m-%d %H:%M'),
                 "Condition": condition,
@@ -645,9 +898,9 @@ def render_dashboard():
                 selection_mode="single-row",
                 column_config={
                     "Machine ID": st.column_config.Column("Machine ID", width="small"),
-                    "Alert ID": st.column_config.Column("Alert ID", width="small"),
+                    "Alert ID": st.column_config.Column("Alert ID", width=max(150, int(df_display["Alert ID"].astype(str).map(len).max() * 10 + 50))),
                     "Description": st.column_config.Column("Description", width="large"),
-                    "Date": st.column_config.Column("Date", width="medium"),
+                    "Date": st.column_config.Column("Date", width=150),
                     "Condition": st.column_config.Column("Condition", width="small"),
                     "Status": st.column_config.Column("Status", width="small"),
                 }
@@ -736,15 +989,15 @@ def render_machine_category_cards():
 
         with cols[idx % 3]:
             st.markdown(f"""
-            <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            <div class='machine-category-card' style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                         border-radius: 12px; padding: 18px; margin: 8px 0;
                         border: 1px solid #2a2a4a; min-height: 190px;'>
                 <div style='font-size:2rem;'>{get_category_icon(category_name)}</div>
-                <h3 style='margin:6px 0 10px 0;'>{category_name}</h3>
-                <p style='margin:3px 0; color:#ddd;'><strong>{len(machines)}</strong> Machines</p>
-                <p style='margin:3px 0; color:#ddd;'>Average Health <strong>{avg_health:.1f}%</strong></p>
+                <h3 class='machine-category-name' style='margin:6px 0 10px 0;'>{category_name}</h3>
+                <p class='machine-category-count' style='margin:3px 0; color:#ddd;'><strong>{len(machines)}</strong> Machines</p>
+                <p class='machine-category-health' style='margin:3px 0; color:#ddd;'>Average Health <strong>{avg_health:.1f}%</strong></p>
                 <p style='margin:10px 0 0 0; font-size:0.85rem; color:#aaa;'>
-                    Healthy {healthy} | Warning {warning} | Critical {critical}
+                    <span class='machine-category-healthy'>Healthy {healthy}</span> | <span class='machine-category-warning'>Warning {warning}</span> | <span class='machine-category-critical'>Critical {critical}</span>
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -820,8 +1073,8 @@ def render_machine_category_detail(factory_id: str):
             <div style='background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                         border-radius: 12px; padding: 15px; margin: 8px 0;
                         border-left: 4px solid {status_color};'>
-                <h3 style='margin:0;'><a href="?navigate={machine.machine_id}" style="color:inherit;text-decoration:none;">{machine.machine_id}</a></h3>
-                <p style='margin:2px 0; color: #aaa;'>{machine.name}</p>
+                <h3 style='margin:0; color:#FFFFFF; font-weight:700;'><a href="?navigate={machine.machine_id}" style="color:#FFFFFF;text-decoration:none;font-weight:700;">{machine.machine_id}</a></h3>
+                <p style='margin:2px 0; color:#FFFFFF; font-weight:700;'>{machine.name}</p>
                 <p style='margin:2px 0; color: #ddd;'>{machine.manufacturer}</p>
                 <p style='margin:6px 0;'>
                     <span style='background:{status_color}; color:white; padding:3px 10px; border-radius:12px; font-size:0.8rem; font-weight:700;'>{machine.status.value}</span>
@@ -1325,8 +1578,149 @@ def render_maintenance_logs_tab(machine: MachineInfo):
     """Render maintenance logs for a machine."""
     st.markdown("### 📜 Maintenance History")
     
-    # Generate logically consistent maintenance history
-    history = _generate_maintenance_history(machine)
+    alerts = data_store.alert_service.get_alerts_by_machine(machine.machine_id)
+    maintenance_logs = [
+        log for log in data_store.maintenance_log_service.get_logs_by_machine(machine.machine_id)
+        if not log.category or log.category == machine.machine_category
+    ]
+    work_orders = data_store.work_order_service.get_work_orders_by_machine(
+        machine.machine_id,
+        include_completed=True
+    )
+
+    def _alert_reason_to_cause(reason: str) -> str:
+        inferred_cause = infer_alert_cause_from_reason(reason)
+        if inferred_cause != "Component degradation over time":
+            return inferred_cause
+        reason_text = (reason or "").lower()
+        if " detected on " in reason_text:
+            return reason.rsplit(" detected on ", 1)[0].strip()
+        marker = f" on {machine.machine_id}".lower()
+        marker_index = reason_text.rfind(marker)
+        if marker_index >= 0:
+            return reason[:marker_index].strip()
+        return (reason or "").strip()
+
+    def _stable_index(*parts) -> int:
+        return sum(ord(ch) for ch in "|".join(str(part or "") for part in parts))
+
+    def _matching_work_order_for_alert(alert):
+        for wo in work_orders:
+            if wo.alert_id == alert.alert_id:
+                return wo
+        return None
+
+    def _matching_log_for_alert(alert):
+        related_work_order_ids = {
+            wo.work_order_id for wo in work_orders
+            if wo.alert_id == alert.alert_id
+        }
+        for log in maintenance_logs:
+            if log.work_order_id in related_work_order_ids:
+                return log
+            if alert.alert_id and alert.alert_id in (log.description or ""):
+                return log
+
+        date_matches = [
+            log for log in maintenance_logs
+            if abs((log.maintenance_date.date() - alert.timestamp.date()).days) <= 7
+        ]
+        if date_matches:
+            return min(
+                date_matches,
+                key=lambda log: abs((log.maintenance_date - alert.timestamp).total_seconds())
+            )
+
+        cause = _alert_reason_to_cause(alert.reason).lower()
+        cause_matches = [
+            log for log in maintenance_logs
+            if cause
+            and (
+                cause in (log.issue or "").lower()
+                or cause in (log.description or "").lower()
+                or cause in (log.action_taken or "").lower()
+            )
+        ]
+        candidates = cause_matches or maintenance_logs
+        if not candidates:
+            return None
+
+        return min(
+            candidates,
+            key=lambda log: abs((log.maintenance_date - alert.timestamp).total_seconds())
+        )
+
+    def _maintenance_type_for_event(alert, log, work_order) -> str:
+        if log and log.maintenance_type:
+            return log.maintenance_type.value
+        if work_order and work_order.maintenance_type:
+            return work_order.maintenance_type
+
+        cause = _alert_reason_to_cause(alert.reason).lower()
+        if alert.severity == AlertSeverity.CRITICAL:
+            return MaintenanceType.CORRECTIVE.value
+        if any(token in cause for token in ("bearing", "compressor", "motor", "pump", "fan", "belt")):
+            return MaintenanceType.CORRECTIVE.value
+        if any(token in cause for token in ("seal", "filter", "gasket", "spark")):
+            return MaintenanceType.REPLACEMENT.value
+        return MaintenanceType.PREVENTIVE.value
+
+    def _technician_for_event(alert, log, work_order) -> str:
+        if log and log.technician:
+            return log.technician
+        if work_order and work_order.assigned_technician and work_order.assigned_technician != "Unassigned":
+            return work_order.assigned_technician
+        if machine.assigned_technician:
+            return machine.assigned_technician
+
+        technicians = [
+            "Rajesh Kumar", "Priya Sharma", "Amit Singh",
+            "Sneha Patel", "Vikram Reddy", "Anita Desai"
+        ]
+        return technicians[_stable_index(machine.machine_id, alert.alert_id) % len(technicians)]
+
+    def _cost_for_event(alert, log, work_order, maintenance_type: str) -> float:
+        if log and log.cost:
+            return log.cost
+        if work_order and work_order.cost:
+            return work_order.cost
+
+        base_costs = {
+            MaintenanceType.INSPECTION.value: 850,
+            MaintenanceType.PREVENTIVE.value: 1800,
+            MaintenanceType.CORRECTIVE.value: 3200,
+            MaintenanceType.REPLACEMENT.value: 4200,
+            MaintenanceType.EMERGENCY.value: 5600,
+        }
+        severity_multiplier = 1.35 if alert.severity == AlertSeverity.CRITICAL else 1.0
+        variation = (_stable_index(alert.alert_id, alert.reason) % 900) + 125
+        return round((base_costs.get(maintenance_type, 1800) + variation) * severity_multiplier, 2)
+
+    def _status_for_event(alert, log) -> str:
+        if log and log.status:
+            return log.status
+        if alert.status == "Open":
+            return "Scheduled"
+        if alert.status in ("Closed", "Resolved"):
+            return "Completed"
+        return alert.status
+
+    history = []
+    for alert in sorted(alerts, key=lambda a: a.timestamp, reverse=True):
+        log = _matching_log_for_alert(alert)
+        work_order = _matching_work_order_for_alert(alert)
+        maintenance_type = _maintenance_type_for_event(alert, log, work_order)
+        history.append({
+            "Machine ID": alert.machine_id,
+            "Date": alert.timestamp.strftime("%Y-%m-%d"),
+            "Condition": alert.severity.value,
+            "Reason": alert.reason,
+            "Cause": _alert_reason_to_cause(alert.reason),
+            "Technician": _technician_for_event(alert, log, work_order),
+            "Cost": _cost_for_event(alert, log, work_order, maintenance_type),
+            "Status": _status_for_event(alert, log),
+            "Maintenance Type": maintenance_type
+        })
     
     if not history:
         st.info("No maintenance logs for this machine.")
@@ -1684,9 +2078,9 @@ def render_analytics():
             cname = row["Category"]
             # Build query param URLs for each badge (relative URLs navigate within same tab)
             def qp(cat, filt, page, maint_cat=None):
-                base = f"?_analytics_category={cat}&_analytics_filter={filt}&_analytics_page={page}"
+                base = f"?_analytics_category={quote(str(cat))}&_analytics_filter={quote(str(filt))}&_analytics_page={quote(str(page))}"
                 if maint_cat:
-                    base += f"&_maint_cat={maint_cat}"
+                    base += f"&_maint_cat={quote(str(maint_cat))}"
                 return base
             # Render entire card as ONE complete HTML block - all badges INSIDE the card
             st.markdown(f"""
@@ -1694,14 +2088,14 @@ def render_analytics():
 <div style='font-size: 24px; line-height: 1.2; font-weight: 700; color: #1F2937; margin: 0 0 10px 0;'>{icon} {cname}</div>
 <div style='font-size: 16px; color: #6B7280; margin: 0 0 18px 0;'>Machines: {row["Machines"]}</div>
 <div style='display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;'>
-<a href='{qp(cname, "healthy", "analytics_machines")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #166534; background: #DCFCE7; border: 1px solid #BBF7D0; text-decoration: none; white-space: nowrap;'>✅ Healthy {row["Healthy"]}</a>
-<a href='{qp(cname, "warning", "analytics_machines")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #92400E; background: #FEF3C7; border: 1px solid #FDE68A; text-decoration: none; white-space: nowrap;'>🟡 Warning {row["Warning"]}</a>
-<a href='{qp(cname, "critical", "analytics_machines")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #991B1B; background: #FEE2E2; border: 1px solid #FECACA; text-decoration: none; white-space: nowrap;'>🔴 Critical {row["Critical"]}</a>
+<a href='{qp(cname, "healthy", "analytics_machines")}' target='_self' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #166534; background: #DCFCE7; border: 1px solid #BBF7D0; text-decoration: none; white-space: nowrap;'>✅ Healthy {row["Healthy"]}</a>
+<a href='{qp(cname, "warning", "analytics_machines")}' target='_self' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #92400E; background: #FEF3C7; border: 1px solid #FDE68A; text-decoration: none; white-space: nowrap;'>🟡 Warning {row["Warning"]}</a>
+<a href='{qp(cname, "critical", "analytics_machines")}' target='_self' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #991B1B; background: #FEE2E2; border: 1px solid #FECACA; text-decoration: none; white-space: nowrap;'>🔴 Critical {row["Critical"]}</a>
 </div>
 <div style='display: flex; flex-wrap: wrap; gap: 8px;'>
-<a href='{qp(cname, "health", "analytics_health_overview")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #9D174D; background: #FCE7F3; border: 1px solid #FBCFE8; text-decoration: none; white-space: nowrap;'>❤️ Avg Health {row["Average Health"]}%</a>
-<a href='{qp(cname, "alerts", "alerts")}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #075985; background: #E0F2FE; border: 1px solid #BAE6FD; text-decoration: none; white-space: nowrap;'>🚨 Alerts {row["Open Alerts"]}</a>
-<a href='{qp(cname, "maintenance", "maintenance_logs", cname)}' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #5B21B6; background: #EDE9FE; border: 1px solid #DDD6FE; text-decoration: none; white-space: nowrap;'>🔧 Maintenance {row["Maintenance Count"]}</a>
+<a href='{qp(cname, "health", "analytics_health_overview")}' target='_self' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #9D174D; background: #FCE7F3; border: 1px solid #FBCFE8; text-decoration: none; white-space: nowrap;'>❤️ Avg Health {row["Average Health"]}%</a>
+<a href='{qp(cname, "alerts", "alerts")}' target='_self' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #075985; background: #E0F2FE; border: 1px solid #BAE6FD; text-decoration: none; white-space: nowrap;'>🚨 Alerts {row["Open Alerts"]}</a>
+<a href='{qp(cname, "maintenance", "maintenance_logs", cname)}' target='_self' style='display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; font-size: 15px; font-weight: 600; color: #5B21B6; background: #EDE9FE; border: 1px solid #DDD6FE; text-decoration: none; white-space: nowrap;'>🔧 Maintenance {row["Maintenance Count"]}</a>
 </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1845,15 +2239,31 @@ def render_analytics():
 def render_alerts():
     """Render alert center - shows ONLY active (Open) alerts."""
     st.markdown("<h1 class='main-header'>🚨 Alert Center</h1>", unsafe_allow_html=True)
+    if came_from_analytics_chip("alerts"):
+        if st.button("← Back to Analytics"):
+            return_to_analytics_from_chip()
     st.markdown("<p class='sub-header'>Showing only active alerts. Resolved alerts are moved to history.</p>", unsafe_allow_html=True)
     st.markdown("---")
     
+    alerts = data_store.alert_service.get_open_alerts()
+    if (
+        st.query_params.get("_analytics_page") == "alerts"
+        and st.session_state.get("analytics_chip_filter") == "alerts"
+        and st.session_state.get("analytics_category")
+    ):
+        analytics_category = st.session_state.get("analytics_category")
+        category_machine_ids = {
+            machine.machine_id
+            for machine in simulator.get_all_machines()
+            if machine.machine_category == analytics_category
+        }
+        alerts = [a for a in alerts if a.machine_id in category_machine_ids]
+
     # Summary: only active alerts (Open) with Warning and Critical breakdown
     col1, col2, col3 = st.columns(3)
-    summary = data_store.alert_service.get_alert_summary()
-    open_count = summary.get("open", 0)
-    critical_count = summary.get("critical", 0)
-    warning_count = summary.get("warning", 0)
+    open_count = len(alerts)
+    critical_count = sum(1 for a in alerts if a.severity == AlertSeverity.CRITICAL)
+    warning_count = sum(1 for a in alerts if a.severity == AlertSeverity.WARNING)
     
     col1.metric("Active Alerts", open_count)
     col2.metric("Warning", warning_count)
@@ -1864,8 +2274,6 @@ def render_alerts():
     # Filter by severity - only for active alerts
     severity_filter = st.selectbox("Filter by Severity", ["All", "CRITICAL", "WARNING", "INFO"])
     
-    # Get ONLY open alerts (active alerts only)
-    alerts = data_store.alert_service.get_open_alerts()
     if severity_filter != "All":
         alerts = [a for a in alerts if a.severity.value == severity_filter]
     
@@ -1898,9 +2306,9 @@ def render_alerts():
                 selection_mode="single-row",
                 column_config={
                     "Machine ID": st.column_config.Column("Machine ID", width="small"),
-                    "Alert ID": st.column_config.Column("Alert ID", width="small"),
+                    "Alert ID": st.column_config.Column("Alert ID", width=max(150, int(df_alert_page["Alert ID"].astype(str).map(len).max() * 10 + 50))),
                     "Description": st.column_config.Column("Description", width="large"),
-                    "Date": st.column_config.Column("Date", width="medium"),
+                    "Date": st.column_config.Column("Date", width=150),
                     "Condition": st.column_config.Column("Condition", width="small"),
                     "Status": st.column_config.Column("Status", width="small"),
                 }
@@ -1984,12 +2392,14 @@ def _get_report_parts(report: Any) -> Dict[str, Any]:
     """Normalize Report objects and stored report dictionaries for display."""
     if isinstance(report, dict):
         return {
+            "report_id": report.get("report_id", ""),
             "title": report.get("title", "Report"),
             "report_type": report.get("report_type", ""),
             "generated_at": report.get("generated_at", datetime.now().isoformat()),
             "data": report.get("data", {})
         }
     return {
+        "report_id": getattr(report, "report_id", ""),
         "title": getattr(report, "title", "Report"),
         "report_type": getattr(report, "report_type", ""),
         "generated_at": getattr(report, "generated_at", datetime.now()).isoformat(),
@@ -2115,6 +2525,31 @@ def _excel_bytes(title: str, fleet_summary: pd.DataFrame, attention: pd.DataFram
     return workbook.encode("utf-8")
 
 
+def _safe_pdf_multi_cell(pdf, text: str, height: int = 6, border: int = 0):
+    available_width = pdf.w - pdf.l_margin - pdf.r_margin
+    if available_width <= 5:
+        pdf.ln()
+        pdf.set_x(pdf.l_margin)
+        available_width = pdf.w - pdf.l_margin - pdf.r_margin
+
+    pdf.set_xy(pdf.l_margin, pdf.get_y())
+    wrapped_lines = []
+    for line in str(text).splitlines() or [""]:
+        parts = []
+        for word in line.split(" "):
+            if not word:
+                parts.append(word)
+                continue
+            if pdf.get_string_width(word) > available_width:
+                max_chars = max(1, int(len(word) * available_width / max(pdf.get_string_width(word), 1)))
+                parts.extend(textwrap.wrap(word, width=max_chars, break_long_words=True, break_on_hyphens=False))
+            else:
+                parts.append(word)
+        wrapped_lines.append(" ".join(parts))
+
+    pdf.multi_cell(available_width, height, "\n".join(wrapped_lines), border=border)
+
+
 def _pdf_bytes(title: str, report_date: str, fleet_summary: pd.DataFrame, attention: pd.DataFrame, summary: str) -> bytes:
     def clean(value: Any) -> str:
         return str(value).encode("latin-1", "replace").decode("latin-1")
@@ -2144,19 +2579,17 @@ def _pdf_bytes(title: str, report_date: str, fleet_summary: pd.DataFrame, attent
             pdf.cell(0, 7, "No warning or critical machines", ln=True)
         else:
             for _, row in attention.iterrows():
-                pdf.set_x(pdf.l_margin)
-                pdf.multi_cell(usable_width, 6, clean(
+                _safe_pdf_multi_cell(pdf, clean(
                     f"{row['Machine ID']} | {row['Machine Name']} | {row['Category']} | "
                     f"{row['Health Score']} | {row['Status']} | {row['Failure Probability']} | "
                     f"{row['Recommendation']}"
-                ), border=1)
+                ), height=6, border=1)
         pdf.ln(4)
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Arial", "B", 12)
         pdf.cell(0, 8, "AI Summary", ln=True)
         pdf.set_font("Arial", "", 10)
-        pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(usable_width, 6, clean(summary))
+        _safe_pdf_multi_cell(pdf, clean(summary), height=6)
         output = pdf.output(dest="S")
         return bytes(output) if isinstance(output, bytearray) else output.encode("latin-1")
     except ImportError:
@@ -2327,10 +2760,705 @@ def _text_pdf_bytes(lines: List[str]) -> bytes:
     return pdf
 
 
+def _first_present(data: Dict[str, Any], *keys: str, default: Any = "") -> Any:
+    for key in keys:
+        if key in data and data[key] not in (None, ""):
+            return data[key]
+    return default
+
+
+def _report_sections(title: str, generated_at: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    display_title = (
+        title if str(title).startswith("Enterprise Predictive Maintenance Report")
+        else f"Enterprise Predictive Maintenance Report - {title}"
+    )
+
+    def number_value(value: Any) -> float:
+        try:
+            return float(str(value).replace("%", "").replace(",", "").strip() or 0)
+        except ValueError:
+            return 0
+
+    def status_value(value: Any) -> str:
+        return getattr(value, "value", value)
+
+    def fmt_count(value: Any) -> Any:
+        if value in (None, ""):
+            return 0
+        try:
+            return int(float(str(value).replace(",", "")))
+        except ValueError:
+            return value
+
+    def fmt_percent(value: Any) -> str:
+        return f"{number_value(value):.1f}%"
+
+    def fmt_currency(value: Any) -> str:
+        return f"₹{number_value(value):,.2f}"
+
+    def fmt_hours(value: Any) -> str:
+        return f"{number_value(value):.1f} h"
+
+    all_machines = simulator.get_all_machines()
+    all_alerts = data_store.alert_service.get_all_alerts()
+    all_work_orders = data_store.work_order_service.get_all_work_orders()
+    all_logs = data_store.maintenance_log_service.get_all_logs()
+    scope = data.get("report_scope", {}) if isinstance(data.get("report_scope", {}), dict) else {}
+    machine_info = data.get("machine_information", {}) if isinstance(data.get("machine_information", {}), dict) else {}
+    scope_machine_id = scope.get("machine_id") or machine_info.get("machine_id")
+    scope_category = scope.get("category_id") or data.get("category_id")
+
+    if scope_machine_id:
+        all_machines = [machine for machine in all_machines if machine.machine_id == scope_machine_id]
+        all_alerts = [alert for alert in all_alerts if alert.machine_id == scope_machine_id]
+        all_work_orders = [work_order for work_order in all_work_orders if work_order.machine_id == scope_machine_id]
+        all_logs = [log for log in all_logs if log.machine_id == scope_machine_id]
+    elif scope_category:
+        factories = simulator.get_all_factories()
+        category_name = factories.get(scope_category, {}).get("name", scope_category)
+        category_text = str(scope_category).strip().lower().replace("_", " ")
+        category_name_text = str(category_name).strip().lower().replace("_", " ")
+        all_machines = [
+            machine for machine in all_machines
+            if str(machine.factory_id).strip().lower().replace("_", " ") in (category_text, category_name_text)
+            or str(machine.machine_category).strip().lower().replace("_", " ") in (category_text, category_name_text)
+        ]
+        scoped_machine_ids = {machine.machine_id for machine in all_machines}
+        all_alerts = [alert for alert in all_alerts if alert.machine_id in scoped_machine_ids]
+        all_work_orders = [work_order for work_order in all_work_orders if work_order.machine_id in scoped_machine_ids]
+        all_logs = [log for log in all_logs if log.machine_id in scoped_machine_ids]
+
+    fleet_fallback = {
+        "total_machines": len(all_machines),
+        "healthy": sum(1 for machine in all_machines if machine.status == MachineStatus.NORMAL),
+        "warning": sum(1 for machine in all_machines if machine.status == MachineStatus.WARNING),
+        "critical": sum(1 for machine in all_machines if machine.status == MachineStatus.CRITICAL),
+        "average_health": round(sum(machine.health_score for machine in all_machines) / len(all_machines), 1) if all_machines else 0,
+        "average_failure_probability": round(sum(machine.failure_probability for machine in all_machines) / len(all_machines) * 100, 1) if all_machines else 0,
+    }
+
+    category_fallback = []
+    category_names = sorted({machine.machine_category for machine in all_machines})
+    for category_name in category_names:
+        machines = [machine for machine in all_machines if machine.machine_category == category_name]
+        category_fallback.append({
+            "category": category_name,
+            "machine_count": len(machines),
+            "healthy": sum(1 for machine in machines if machine.status == MachineStatus.NORMAL),
+            "warning": sum(1 for machine in machines if machine.status == MachineStatus.WARNING),
+            "critical": sum(1 for machine in machines if machine.status == MachineStatus.CRITICAL),
+            "average_health": round(sum(machine.health_score for machine in machines) / len(machines), 1) if machines else 0,
+        })
+
+    top_risk_fallback = [
+        {
+            "machine_id": machine.machine_id,
+            "machine_name": machine.name,
+            "category": machine.machine_category,
+            "health_score": machine.health_score,
+            "failure_probability": round(machine.failure_probability * 100, 1),
+            "status": machine.status.value,
+        }
+        for machine in sorted(all_machines, key=lambda item: item.failure_probability, reverse=True)[:10]
+    ]
+
+    alert_fallback = {
+        "total": len(all_alerts),
+        "open": sum(1 for alert in all_alerts if alert.status == "Open"),
+        "closed": sum(1 for alert in all_alerts if alert.status != "Open"),
+        "critical": sum(1 for alert in all_alerts if alert.severity == AlertSeverity.CRITICAL),
+        "warning": sum(1 for alert in all_alerts if alert.severity == AlertSeverity.WARNING),
+        "normal": sum(1 for alert in all_alerts if alert.severity == AlertSeverity.INFO),
+    }
+
+    completed_work_orders = [
+        work_order for work_order in all_work_orders
+        if status_value(work_order.status) == WorkOrderStatus.COMPLETED.value
+    ]
+    pending_work_orders = [
+        work_order for work_order in all_work_orders
+        if status_value(work_order.status) in (WorkOrderStatus.OPEN.value, WorkOrderStatus.IN_PROGRESS.value)
+    ]
+    repair_durations = [log.duration_hours for log in all_logs if log.duration_hours > 0]
+    maintenance_fallback = {
+        "total_work_orders": len(all_work_orders),
+        "completed": len(completed_work_orders),
+        "pending": len(pending_work_orders),
+        "average_repair_time": round(sum(repair_durations) / len(repair_durations), 1) if repair_durations else 0,
+        "downtime": round(sum(log.duration_hours for log in all_logs), 1),
+        "maintenance_cost": round(sum(log.cost for log in all_logs), 2),
+    }
+
+    fleet = (
+        data.get("fleet_summary")
+        or data.get("fleet_performance")
+        or data.get("fleet_health")
+        or {}
+    )
+    if not isinstance(fleet, dict):
+        fleet = {}
+
+    total_machines = _first_present(data, "total_machines", "machine_count", default=fleet.get("total_machines", fleet_fallback["total_machines"]))
+    healthy = _first_present(data, "normal_count", "healthy", default=fleet.get("healthy", fleet_fallback["healthy"]))
+    warning = _first_present(data, "warning_count", "warning", default=fleet.get("warning", fleet_fallback["warning"]))
+    critical = _first_present(data, "critical_count", "critical", default=fleet.get("critical", fleet_fallback["critical"]))
+    avg_health = _first_present(data, "average_health", "average_health_score", default=fleet.get("average_health", fleet_fallback["average_health"]))
+    avg_failure = _first_present(data, "average_failure_probability", default=fleet.get("average_failure_probability", fleet_fallback["average_failure_probability"]))
+
+    if "machine_information" in data:
+        machine = data["machine_information"]
+        total_machines = 1
+        healthy = 1 if data.get("status") == "NORMAL" else 0
+        warning = 1 if data.get("status") == "WARNING" else 0
+        critical = 1 if data.get("status") == "CRITICAL" else 0
+        avg_health = data.get("health", data.get("health_score", ""))
+        avg_failure = data.get("failure_probability", "")
+        if number_value(avg_failure) <= 1:
+            avg_failure = number_value(avg_failure) * 100
+        display_title = f"Enterprise Predictive Maintenance Report - {machine.get('machine_id', '')}"
+
+    period = (
+        data.get("report_period")
+        or data.get("report_date")
+        or (f"Last {data.get('period_days')} Days" if data.get("period_days") else "Current reporting period")
+    )
+
+    categories = (
+        data.get("category_summary")
+        or data.get("category_comparison")
+        or data.get("category_performance")
+        or category_fallback
+    )
+    if not categories and data.get("category"):
+        categories = [{
+            "category": data.get("category"),
+            "machine_count": data.get("machine_count", data.get("total_machines", "")),
+            "healthy": data.get("healthy", ""),
+            "warning": data.get("warning", ""),
+            "critical": data.get("critical", ""),
+            "average_health": data.get("average_health", "")
+        }]
+
+    risk_machines = (
+        data.get("top_risk_machines")
+        or data.get("high_risk_machines")
+        or data.get("critical_machines")
+        or data.get("warning_machines")
+        or data.get("predictions")
+        or data.get("machine_health_summary")
+        or top_risk_fallback
+    )
+    if isinstance(risk_machines, list):
+        risk_machines = sorted(
+            risk_machines,
+            key=lambda row: number_value(row.get("failure_probability", 0)),
+            reverse=True
+        )[:10]
+    else:
+        risk_machines = []
+
+    alert_stats = data.get("alert_statistics") or {}
+    alerts = data.get("alerts") or data.get("alert_history") or data.get("open_alerts") or data.get("recent_alerts") or []
+    total_alerts = data.get("total_alerts", alert_stats.get("total", len(alerts) if isinstance(alerts, list) and alerts else alert_fallback["total"]))
+    open_alerts = alert_stats.get("open", len(data.get("open_alerts", [])) if isinstance(data.get("open_alerts"), list) and data.get("open_alerts") else alert_fallback["open"])
+    closed_alerts = alert_stats.get("closed", data.get("resolved_alerts", alert_fallback["closed"]))
+    severity = data.get("alerts_by_severity") or {
+        "critical": alert_stats.get("critical", alert_fallback["critical"]),
+        "warning": alert_stats.get("warning", alert_fallback["warning"]),
+        "normal": alert_stats.get("info", alert_fallback["normal"])
+    }
+
+    work_orders = data.get("work_order_statistics") or data.get("work_orders_by_status") or {}
+    maintenance = data.get("maintenance_statistics") or data.get("maintenance_summary") or {}
+    total_work_orders = work_orders.get("total", maintenance_fallback["total_work_orders"])
+    completed = work_orders.get("completed", _first_present(data, "completed_work_orders", "maintenance_completed", default=maintenance_fallback["completed"]))
+    pending = work_orders.get("open", data.get("pending_jobs", maintenance_fallback["pending"]))
+    if isinstance(pending, list):
+        pending = len(pending)
+    avg_repair = _first_present(data, "average_repair_time", "mttr", default=maintenance_fallback["average_repair_time"])
+    downtime = _first_present(data, "downtime", "total_downtime", "total_hours", default=maintenance.get("total_downtime", maintenance_fallback["downtime"]))
+    cost = _first_present(data, "maintenance_cost", "total_maintenance_cost", "total_cost", default=maintenance.get("total_cost", maintenance_fallback["maintenance_cost"]))
+    if number_value(avg_repair) == 0 and maintenance_fallback["average_repair_time"]:
+        avg_repair = maintenance_fallback["average_repair_time"]
+    if number_value(downtime) == 0 and maintenance_fallback["downtime"]:
+        downtime = maintenance_fallback["downtime"]
+    if number_value(cost) == 0 and maintenance_fallback["maintenance_cost"]:
+        cost = maintenance_fallback["maintenance_cost"]
+
+    recommendations = data.get("recommendations") or []
+    if isinstance(recommendations, str):
+        recommendations = [recommendations]
+    if not recommendations:
+        recommendations = []
+        if critical not in ("", 0):
+            recommendations.append("Prioritize immediate corrective maintenance for critical equipment.")
+        if warning not in ("", 0):
+            recommendations.append("Schedule preventive service for machines currently in warning condition.")
+        if avg_failure not in ("", 0) and number_value(avg_failure) > 30:
+            recommendations.append("Increase inspection frequency for equipment with elevated failure probability.")
+        if cost not in ("", 0):
+            recommendations.append("Review maintenance spend and isolate recurring cost drivers.")
+        recommendations.append("Continue routine monitoring and close open work orders on schedule.")
+    recommendations = recommendations[:6]
+
+    return {
+        "title": display_title,
+        "generated_at": generated_at[:19].replace("T", " "),
+        "period": period,
+        "summary": [
+            ("Total Machines", fmt_count(total_machines)),
+            ("Healthy", fmt_count(healthy)),
+            ("Warning", fmt_count(warning)),
+            ("Critical", fmt_count(critical)),
+            ("Average Health", fmt_percent(avg_health)),
+            ("Average Failure Probability", fmt_percent(avg_failure)),
+        ],
+        "category_rows": [
+            {
+                "Category": row.get("category", row.get("name", "")),
+                "Machines": fmt_count(row.get("machine_count", row.get("total_machines", 0))),
+                "Healthy": fmt_count(row.get("healthy", 0)),
+                "Warning": fmt_count(row.get("warning", 0)),
+                "Critical": fmt_count(row.get("critical", 0)),
+                "Avg Health": fmt_percent(row.get("average_health", 0)),
+            }
+            for row in categories[:12]
+        ],
+        "risk_rows": [
+            {
+                "Machine ID": row.get("machine_id", ""),
+                "Machine Name": row.get("machine_name", row.get("name", "")),
+                "Category": row.get("category", row.get("type", "")),
+                "Health Score": fmt_percent(row.get("health_score", 0)),
+                "Failure Probability": fmt_percent(row.get("failure_probability", 0)),
+                "Condition": row.get("status", row.get("condition", "")),
+            }
+            for row in risk_machines
+        ],
+        "alerts": [
+            ("Total Alerts", fmt_count(total_alerts)),
+            ("Open Alerts", fmt_count(open_alerts)),
+            ("Closed Alerts", fmt_count(closed_alerts)),
+            ("Critical", fmt_count(severity.get("critical", severity.get("CRITICAL", 0)))),
+            ("Warning", fmt_count(severity.get("warning", severity.get("WARNING", 0)))),
+            ("Normal", fmt_count(severity.get("normal", severity.get("info", severity.get("INFO", 0))))),
+        ],
+        "maintenance": [
+            ("Total Work Orders", fmt_count(total_work_orders)),
+            ("Completed", fmt_count(completed)),
+            ("Pending", fmt_count(pending)),
+            ("Average Repair Time", fmt_hours(avg_repair)),
+            ("Downtime", fmt_hours(downtime)),
+            ("Maintenance Cost", fmt_currency(cost)),
+        ],
+        "recommendations": recommendations,
+    }
+
+
 def _generic_pdf_bytes(title: str, generated_at: str, data: Dict[str, Any]) -> bytes:
-    lines = [title, f"Generated: {generated_at[:19].replace('T', ' ')}", ""]
-    lines.extend(f"{row['Field']}: {row['Value']}" for row in _report_data_rows(data))
-    return _text_pdf_bytes(lines)
+    sections = _report_sections(title, generated_at, data)
+    try:
+        from fpdf import FPDF
+
+        def clean(value: Any) -> str:
+            return str(value).encode("latin-1", "replace").decode("latin-1")
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=12)
+        pdf.set_font("Arial", "B", 15)
+        pdf.cell(0, 9, clean(sections["title"]), ln=True)
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(0, 7, clean(f"Generated On: {sections['generated_at']}"), ln=True)
+        pdf.cell(0, 7, clean(f"Report Period: {sections['period']}"), ln=True)
+        pdf.ln(3)
+
+        def heading(text: str):
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, clean(text), ln=True)
+            pdf.set_font("Arial", "", 9)
+
+        def key_value_table(rows: List[tuple]):
+            for label, value in rows:
+                pdf.cell(65, 7, clean(label), border=1)
+                pdf.cell(0, 7, clean(value), border=1, ln=True)
+            pdf.ln(3)
+
+        def data_table(rows: List[Dict[str, Any]], columns: List[str]):
+            if not rows:
+                pdf.cell(0, 7, "No records available", border=1, ln=True)
+                pdf.ln(3)
+                return
+            widths = [28, 28, 22, 22, 22, 32][:len(columns)]
+            if len(columns) == 6 and columns[0] == "Machine ID":
+                widths = [25, 42, 32, 25, 35, 28]
+            pdf.set_font("Arial", "B", 8)
+            for col, width in zip(columns, widths):
+                pdf.cell(width, 7, clean(col), border=1)
+            pdf.ln()
+            pdf.set_font("Arial", "", 8)
+            for row in rows:
+                for col, width in zip(columns, widths):
+                    pdf.cell(width, 7, clean(row.get(col, ""))[:24], border=1)
+                pdf.ln()
+            pdf.ln(3)
+
+        heading("Executive Summary")
+        key_value_table(sections["summary"])
+        heading("Category Summary")
+        data_table(sections["category_rows"], ["Category", "Machines", "Healthy", "Warning", "Critical", "Avg Health"])
+        heading("Top Risk Machines")
+        data_table(sections["risk_rows"], ["Machine ID", "Machine Name", "Category", "Health Score", "Failure Probability", "Condition"])
+        heading("Alert Summary")
+        key_value_table(sections["alerts"])
+        heading("Maintenance Summary")
+        key_value_table(sections["maintenance"])
+        heading("Recommendations")
+        pdf.ln(2)
+        for item in sections["recommendations"]:
+            text = clean(str(item))
+            _safe_pdf_multi_cell(pdf, f"- {text}", height=6)
+
+        output = pdf.output(dest="S")
+        return bytes(output) if isinstance(output, bytearray) else output.encode("latin-1")
+    except ImportError:
+        lines = [
+            sections["title"],
+            f"Generated On: {sections['generated_at']}",
+            f"Report Period: {sections['period']}",
+            "",
+            "Executive Summary",
+        ]
+        lines.extend(f"{label}: {value}" for label, value in sections["summary"])
+        lines.extend(["", "Category Summary"])
+        lines.extend(" | ".join(str(row.get(col, "")) for col in ["Category", "Machines", "Healthy", "Warning", "Critical", "Avg Health"]) for row in sections["category_rows"])
+        lines.extend(["", "Top Risk Machines"])
+        lines.extend(" | ".join(str(row.get(col, "")) for col in ["Machine ID", "Machine Name", "Category", "Health Score", "Failure Probability", "Condition"]) for row in sections["risk_rows"])
+        lines.extend(["", "Alert Summary"])
+        lines.extend(f"{label}: {value}" for label, value in sections["alerts"])
+        lines.extend(["", "Maintenance Summary"])
+        lines.extend(f"{label}: {value}" for label, value in sections["maintenance"])
+        lines.extend(["", "Recommendations"])
+        lines.extend(f"- {item}" for item in sections["recommendations"])
+        return _text_pdf_bytes(lines)
+
+
+def _report_xml_bytes(title: str, generated_at: str, data: Dict[str, Any]) -> bytes:
+    import html
+
+    sections = _report_sections(title, generated_at, data)
+
+    def metrics_xml(name: str, rows: List[tuple]) -> List[str]:
+        xml = [f"  <section name=\"{html.escape(name)}\">"]
+        for label, value in rows:
+            xml.extend([
+                "    <metric>",
+                f"      <name>{html.escape(str(label))}</name>",
+                f"      <value>{html.escape(str(value))}</value>",
+                "    </metric>"
+            ])
+        xml.append("  </section>")
+        return xml
+
+    def table_xml(name: str, rows: List[Dict[str, Any]]) -> List[str]:
+        xml = [f"  <section name=\"{html.escape(name)}\">"]
+        for row in rows:
+            xml.append("    <row>")
+            for key, value in row.items():
+                tag = re.sub(r"[^A-Za-z0-9_]+", "_", key.strip().lower()).strip("_") or "value"
+                xml.append(f"      <{tag}>{html.escape(str(value))}</{tag}>")
+            xml.append("    </row>")
+        xml.append("  </section>")
+        return xml
+
+    rows = [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+        "<report>",
+        f"  <title>{html.escape(sections['title'])}</title>",
+        f"  <generated_on>{html.escape(sections['generated_at'])}</generated_on>",
+        f"  <report_period>{html.escape(str(sections['period']))}</report_period>",
+    ]
+    rows.extend(metrics_xml("Executive Summary", sections["summary"]))
+    rows.extend(table_xml("Category Summary", sections["category_rows"]))
+    rows.extend(table_xml("Top Risk Machines", sections["risk_rows"]))
+    rows.extend(metrics_xml("Alert Summary", sections["alerts"]))
+    rows.extend(metrics_xml("Maintenance Summary", sections["maintenance"]))
+    rows.append("  <section name=\"Recommendations\">")
+    for item in sections["recommendations"]:
+        rows.append(f"    <recommendation>{html.escape(str(item))}</recommendation>")
+    rows.extend(["  </section>", "</report>"])
+    return "\n".join(rows).encode("utf-8")
+
+
+def _report_docx_bytes(title: str, generated_at: str, data: Dict[str, Any]) -> bytes:
+    import html
+
+    sections = _report_sections(title, generated_at, data)
+
+    def paragraph(text: str, bold: bool = False) -> str:
+        props = "<w:rPr><w:b/></w:rPr>" if bold else ""
+        return f"<w:p><w:r>{props}<w:t>{html.escape(str(text))}</w:t></w:r></w:p>"
+
+    def table(rows: List[List[Any]]) -> str:
+        cells = []
+        for row in rows:
+            cell_xml = "".join(
+                "<w:tc><w:tcPr><w:tcBorders>"
+                "<w:top w:val=\"single\" w:sz=\"4\"/><w:left w:val=\"single\" w:sz=\"4\"/>"
+                "<w:bottom w:val=\"single\" w:sz=\"4\"/><w:right w:val=\"single\" w:sz=\"4\"/>"
+                "</w:tcBorders></w:tcPr>"
+                f"{paragraph(value)}</w:tc>"
+                for value in row
+            )
+            cells.append(f"<w:tr>{cell_xml}</w:tr>")
+        return f"<w:tbl><w:tblPr><w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/><w:left w:val=\"single\" w:sz=\"4\"/><w:bottom w:val=\"single\" w:sz=\"4\"/><w:right w:val=\"single\" w:sz=\"4\"/><w:insideH w:val=\"single\" w:sz=\"4\"/><w:insideV w:val=\"single\" w:sz=\"4\"/></w:tblBorders></w:tblPr>{''.join(cells)}</w:tbl>"
+
+    body = [
+        paragraph(sections["title"], bold=True),
+        paragraph(f"Generated On: {sections['generated_at']}"),
+        paragraph(f"Report Period: {sections['period']}"),
+        paragraph(""),
+        paragraph("Executive Summary", bold=True),
+        table([["Metric", "Value"]] + [[label, value] for label, value in sections["summary"]]),
+        paragraph("Category Summary", bold=True),
+        table([["Category", "Machines", "Healthy", "Warning", "Critical", "Avg Health"]] + [
+            [row.get("Category", ""), row.get("Machines", ""), row.get("Healthy", ""), row.get("Warning", ""), row.get("Critical", ""), row.get("Avg Health", "")]
+            for row in sections["category_rows"]
+        ]),
+        paragraph("Top Risk Machines", bold=True),
+        table([["Machine ID", "Machine Name", "Category", "Health Score", "Failure Probability", "Condition"]] + [
+            [row.get("Machine ID", ""), row.get("Machine Name", ""), row.get("Category", ""), row.get("Health Score", ""), row.get("Failure Probability", ""), row.get("Condition", "")]
+            for row in sections["risk_rows"]
+        ]),
+        paragraph("Alert Summary", bold=True),
+        table([["Metric", "Value"]] + [[label, value] for label, value in sections["alerts"]]),
+        paragraph("Maintenance Summary", bold=True),
+        table([["Metric", "Value"]] + [[label, value] for label, value in sections["maintenance"]]),
+        paragraph("Recommendations", bold=True),
+    ]
+    body.extend(paragraph(f"- {item}") for item in sections["recommendations"])
+    document_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    {''.join(body)}
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+  </w:body>
+</w:document>"""
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"""
+    rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as docx:
+        docx.writestr("[Content_Types].xml", content_types)
+        docx.writestr("_rels/.rels", rels)
+        docx.writestr("word/document.xml", document_xml)
+    return output.getvalue()
+
+
+def _download_generated_report(report: Any, key_context: str = ""):
+    parts = _get_report_parts(report)
+    title = parts["title"]
+    generated_at = parts["generated_at"]
+    data = parts["data"]
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", title).strip("_").lower() or "report"
+    key_suffix = re.sub(
+        r"[^A-Za-z0-9_-]+",
+        "_",
+        f"{key_context}_{parts['report_id']}_{safe_name}_{generated_at}"
+    ).strip("_")
+    file_cache = st.session_state.setdefault("report_download_file_cache", {})
+    file_cache_key = f"{parts['report_id']}|{safe_name}|{generated_at}"
+    if file_cache_key not in file_cache:
+        file_cache[file_cache_key] = {
+            "pdf": _generic_pdf_bytes(title, generated_at, data),
+            "docx": _report_docx_bytes(title, generated_at, data),
+            "xml": _report_xml_bytes(title, generated_at, data),
+        }
+    files = file_cache[file_cache_key]
+
+    st.success(f"{title} Generated Successfully")
+    st.markdown("Download:")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.download_button(
+            "📄 PDF",
+            data=files["pdf"],
+            file_name=f"{safe_name}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            key=f"report_pdf_{key_suffix}"
+        )
+    with col2:
+        st.download_button(
+            "📝 DOCX",
+            data=files["docx"],
+            file_name=f"{safe_name}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key=f"report_docx_{key_suffix}"
+        )
+    with col3:
+        st.download_button(
+            "🗂 XML",
+            data=files["xml"],
+            file_name=f"{safe_name}.xml",
+            mime="application/xml",
+            use_container_width=True,
+            key=f"report_xml_{key_suffix}"
+        )
+
+
+def _report_with_scope(report: Any, selected_category: str = "", selected_machine_id: str = "") -> Dict[str, Any]:
+    parts = _get_report_parts(report)
+    data = dict(parts["data"])
+    scope_machine_id = selected_machine_id or ""
+    scope_category = selected_category or ""
+    data["report_scope"] = {
+        "machine_id": scope_machine_id,
+        "category_id": scope_category,
+    }
+
+    machines = simulator.get_all_machines()
+    if scope_machine_id:
+        machines = [machine for machine in machines if machine.machine_id == scope_machine_id]
+    elif scope_category:
+        factories = simulator.get_all_factories()
+        category_name = factories.get(scope_category, {}).get("name", scope_category)
+        category_text = str(scope_category).strip().lower().replace("_", " ")
+        category_name_text = str(category_name).strip().lower().replace("_", " ")
+        machines = [
+            machine for machine in machines
+            if str(machine.factory_id).strip().lower().replace("_", " ") in (category_text, category_name_text)
+            or str(machine.machine_category).strip().lower().replace("_", " ") in (category_text, category_name_text)
+        ]
+
+    machine_ids = {machine.machine_id for machine in machines}
+    alerts = [alert for alert in data_store.alert_service.get_all_alerts() if alert.machine_id in machine_ids]
+    work_orders = [work_order for work_order in data_store.work_order_service.get_all_work_orders() if work_order.machine_id in machine_ids]
+    logs = [log for log in data_store.maintenance_log_service.get_all_logs() if log.machine_id in machine_ids]
+
+    def status_value(value: Any) -> str:
+        return getattr(value, "value", value)
+
+    data.update({
+        "total_machines": len(machines),
+        "normal_count": sum(1 for machine in machines if machine.status == MachineStatus.NORMAL),
+        "warning_count": sum(1 for machine in machines if machine.status == MachineStatus.WARNING),
+        "critical_count": sum(1 for machine in machines if machine.status == MachineStatus.CRITICAL),
+        "average_health": round(sum(machine.health_score for machine in machines) / len(machines), 1) if machines else 0,
+        "average_failure_probability": round(sum(machine.failure_probability for machine in machines) / len(machines) * 100, 1) if machines else 0,
+    })
+
+    category_summary = []
+    for category_name in sorted({machine.machine_category for machine in machines}):
+        category_machines = [machine for machine in machines if machine.machine_category == category_name]
+        category_summary.append({
+            "category": category_name,
+            "machine_count": len(category_machines),
+            "healthy": sum(1 for machine in category_machines if machine.status == MachineStatus.NORMAL),
+            "warning": sum(1 for machine in category_machines if machine.status == MachineStatus.WARNING),
+            "critical": sum(1 for machine in category_machines if machine.status == MachineStatus.CRITICAL),
+            "average_health": round(sum(machine.health_score for machine in category_machines) / len(category_machines), 1) if category_machines else 0,
+        })
+    data["category_summary"] = category_summary
+    data["top_risk_machines"] = [
+        {
+            "machine_id": machine.machine_id,
+            "machine_name": machine.name,
+            "category": machine.machine_category,
+            "health_score": machine.health_score,
+            "failure_probability": round(machine.failure_probability * 100, 1),
+            "status": machine.status.value,
+        }
+        for machine in sorted(machines, key=lambda item: item.failure_probability, reverse=True)[:10]
+    ]
+
+    data["alert_statistics"] = {
+        "total": len(alerts),
+        "open": sum(1 for alert in alerts if alert.status == "Open"),
+        "closed": sum(1 for alert in alerts if alert.status != "Open"),
+        "critical": sum(1 for alert in alerts if alert.severity == AlertSeverity.CRITICAL),
+        "warning": sum(1 for alert in alerts if alert.severity == AlertSeverity.WARNING),
+        "info": sum(1 for alert in alerts if alert.severity == AlertSeverity.INFO),
+    }
+    data["work_order_statistics"] = {
+        "total": len(work_orders),
+        "open": sum(1 for work_order in work_orders if status_value(work_order.status) == WorkOrderStatus.OPEN.value),
+        "in_progress": sum(1 for work_order in work_orders if status_value(work_order.status) == WorkOrderStatus.IN_PROGRESS.value),
+        "completed": sum(1 for work_order in work_orders if status_value(work_order.status) == WorkOrderStatus.COMPLETED.value),
+        "cancelled": sum(1 for work_order in work_orders if status_value(work_order.status) == WorkOrderStatus.CANCELLED.value),
+    }
+
+    durations = [log.duration_hours for log in logs if log.duration_hours > 0]
+    maintenance_cost = round(sum(log.cost for log in logs), 2)
+    downtime = round(sum(log.duration_hours for log in logs), 1)
+    data["maintenance_statistics"] = {
+        "total_events": len(logs),
+        "total_cost": maintenance_cost,
+        "total_downtime": downtime,
+        "average_duration": round(sum(durations) / len(durations), 1) if durations else 0,
+    }
+    data["average_repair_time"] = data["maintenance_statistics"]["average_duration"]
+    data["downtime"] = downtime
+    data["maintenance_cost"] = maintenance_cost
+    data["maintenance_logs"] = [log.to_dict() for log in logs]
+
+    if "predictions" in data:
+        data["predictions"] = [row for row in data.get("predictions", []) if row.get("machine_id") in machine_ids]
+        data["total_predictions"] = len(data["predictions"])
+        data["high_risk_count"] = len([row for row in data["predictions"] if float(row.get("failure_probability", 0) or 0) > 50])
+        data["medium_risk_count"] = len([row for row in data["predictions"] if 20 < float(row.get("failure_probability", 0) or 0) <= 50])
+        data["low_risk_count"] = len([row for row in data["predictions"] if float(row.get("failure_probability", 0) or 0) <= 20])
+        data["failure_probability_distribution"] = {
+            "high_risk": data["high_risk_count"],
+            "medium_risk": data["medium_risk_count"],
+            "low_risk": data["low_risk_count"],
+        }
+    if "high_risk_machines" in data:
+        data["high_risk_machines"] = [row for row in data.get("high_risk_machines", []) if row.get("machine_id") in machine_ids]
+    if "completed_jobs" in data:
+        data["completed_jobs"] = [row for row in data.get("completed_jobs", []) if row.get("machine_id") in machine_ids]
+    if "pending_jobs" in data:
+        data["pending_jobs"] = [row for row in data.get("pending_jobs", []) if row.get("machine_id") in machine_ids]
+
+    data["recommendations"] = []
+    if data["critical_count"]:
+        data["recommendations"].append("Prioritize immediate corrective maintenance for critical equipment in the selected scope.")
+    if data["warning_count"]:
+        data["recommendations"].append("Schedule preventive service for warning machines in the selected scope.")
+    if data["average_failure_probability"] > 30:
+        data["recommendations"].append("Increase monitoring frequency for equipment with elevated failure probability.")
+    if maintenance_cost:
+        data["recommendations"].append("Review maintenance spend for the selected scope and isolate recurring cost drivers.")
+    data["recommendations"].append("Continue routine monitoring and close open work orders on schedule.")
+
+    return {
+        "report_id": parts["report_id"],
+        "report_type": parts["report_type"],
+        "title": parts["title"],
+        "generated_at": parts["generated_at"],
+        "data": data,
+    }
+
+
+def _generate_report_with_downloads(cache_key: str, generate_report):
+    report_cache = st.session_state.setdefault("generated_report_cache", {})
+    if cache_key in report_cache:
+        _download_generated_report(report_cache[cache_key], key_context=cache_key)
+        return
+
+    st.info("Generating Report...")
+    with st.spinner("Generating Report..."):
+        report = generate_report()
+        report_cache[cache_key] = report
+    _download_generated_report(report, key_context=cache_key)
 
 
 def _download_generic_report_buttons(title: str, generated_at: str, data: Dict[str, Any], key_context: str = ""):
@@ -2432,76 +3560,96 @@ def render_reports():
     st.markdown("<h1 class='main-header'>📈 Reports</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
+    st.subheader("Quick Reports")
     col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("📅 Generate Daily Report", use_container_width=True):
-            report = report_generator.generate_daily_report()
-            st.success(f"✅ {report.title}")
-            _render_business_report(report, key_context=f"current_{report.report_type}_{report.report_id}")
+            _generate_report_with_downloads(
+                "daily_report",
+                report_generator.generate_daily_report
+            )
     
     with col2:
         if st.button("📆 Generate Weekly Report", use_container_width=True):
-            report = report_generator.generate_weekly_report()
-            st.success(f"✅ {report.title}")
-            _render_business_report(report, key_context=f"current_{report.report_type}_{report.report_id}")
+            _generate_report_with_downloads(
+                "weekly_report",
+                report_generator.generate_weekly_report
+            )
     
     with col3:
         if st.button("📊 Generate Monthly Report", use_container_width=True):
-            report = report_generator.generate_monthly_report()
-            st.success(f"✅ {report.title}")
-            _render_business_report(report, key_context=f"current_{report.report_type}_{report.report_id}")
+            _generate_report_with_downloads(
+                "monthly_report",
+                report_generator.generate_monthly_report
+            )
     
     st.markdown("---")
     
-    col1, col2, col3 = st.columns(3)
+    with st.container(border=True):
+        st.subheader("Custom Reports")
+        left_col, right_col = st.columns([1, 1], gap="large")
+        
+        with left_col:
+            factories = simulator.get_all_factories()
+            category_options = list(factories.keys())
+            selected_category = st.selectbox(
+                "Category",
+                category_options,
+                format_func=lambda fid: factories[fid].get("name", fid),
+                key="machine_report_category"
+            )
+            category_machines = simulator.get_factory_machines(selected_category) if selected_category else []
+            machine_lookup = {machine.machine_id: machine for machine in category_machines}
+            machine_options = [""] + list(machine_lookup.keys())
+            selected_machine_id = st.selectbox(
+                "Machine",
+                machine_options,
+                format_func=lambda mid: (
+                    "Select Machine" if not mid
+                    else f"{mid} - {machine_lookup[mid].name}"
+                ),
+                key="machine_report_machine"
+            )
+            if st.button("⚙️ Machine Report", use_container_width=True):
+                if not selected_machine_id:
+                    st.warning("Select a machine to generate a machine report.")
+                else:
+                    _generate_report_with_downloads(
+                        f"machine_report_{selected_machine_id}",
+                        lambda: _report_with_scope(
+                            report_generator.generate_machine_report(selected_machine_id),
+                            selected_category,
+                            selected_machine_id
+                        )
+                    )
     
-    with col1:
-        factories = simulator.get_all_factories()
-        category_options = list(factories.keys())
-        selected_category = st.selectbox(
-            "Category",
-            category_options,
-            format_func=lambda fid: factories[fid].get("name", fid),
-            key="machine_report_category"
-        )
-        category_machines = simulator.get_factory_machines(selected_category) if selected_category else []
-        machine_lookup = {machine.machine_id: machine for machine in category_machines}
-        machine_options = [""] + list(machine_lookup.keys())
-        selected_machine_id = st.selectbox(
-            "Machine",
-            machine_options,
-            format_func=lambda mid: (
-                "Select Machine" if not mid
-                else f"{mid} - {machine_lookup[mid].name}"
-            ),
-            key="machine_report_machine"
-        )
-        if st.button("⚙️ Machine Report", use_container_width=True):
-            if not selected_machine_id:
-                st.warning("Select a machine to generate a machine report.")
-            else:
-                with st.spinner("Generating..."):
-                    report = report_generator.generate_machine_report(selected_machine_id)
-                    _render_business_report(report, key_context=f"current_{report.report_type}_{report.report_id}")
-    
-    with col2:
-        if st.button("🏷️ Category Report", use_container_width=True):
-            factory_id = st.text_input("Enter Category ID:", "REFRIGERATOR")
-            with st.spinner("Generating..."):
-                report = report_generator.generate_factory_report(factory_id)
-                _render_business_report(report, key_context=f"current_{report.report_type}_{report.report_id}")
-    
-    with col3:
-        if st.button("🔮 Prediction Report", use_container_width=True):
-            with st.spinner("Generating..."):
-                report = report_generator.generate_prediction_report()
-                _render_business_report(report, key_context=f"current_{report.report_type}_{report.report_id}")
+        with right_col:
+            if st.button("🏷️ Category Report", use_container_width=True):
+                _generate_report_with_downloads(
+                    f"category_report_{selected_category}",
+                    lambda: report_generator.generate_factory_report(selected_category)
+                )
+            
+            if st.button("🔮 Prediction Report", use_container_width=True):
+                _generate_report_with_downloads(
+                    f"prediction_report_{selected_machine_id or selected_category}",
+                    lambda: _report_with_scope(
+                        report_generator.generate_prediction_report(),
+                        selected_category,
+                        selected_machine_id
+                    )
+                )
 
-        if st.button("Maintenance Report", use_container_width=True):
-            with st.spinner("Generating..."):
-                report = report_generator.generate_maintenance_report()
-                _render_business_report(report, key_context=f"current_{report.report_type}_{report.report_id}")
+            if st.button("Maintenance Report", use_container_width=True):
+                _generate_report_with_downloads(
+                    f"maintenance_report_{selected_machine_id or selected_category}",
+                    lambda: _report_with_scope(
+                        report_generator.generate_maintenance_report(),
+                        selected_category,
+                        selected_machine_id
+                    )
+                )
     
     st.markdown("---")
     
@@ -2511,7 +3659,7 @@ def render_reports():
     if recent:
         for idx, r in enumerate(recent):
             with st.expander(f"{r['title']} ({r['generated_at'][:10]})"):
-                _render_business_report(r, key_context=f"history_{r.get('report_type', 'report')}_{r.get('report_id', idx)}_{idx}")
+                _download_generated_report(r, key_context=f"history_{r.get('report_type', 'report')}_{r.get('report_id', idx)}_{idx}")
     else:
         st.info("No reports generated yet.")
 
@@ -2605,6 +3753,47 @@ def render_maintenance_logs():
     
     from maintenance_logs_enhanced import compute_all_category_summaries
     all_category_summaries = compute_all_category_summaries(all_logs, all_machines)
+    
+    # ==================== OVERALL MAINTENANCE SUMMARY ====================
+    total_logs = sum(s['total_logs'] for s in all_category_summaries)
+    total_completed = sum(s['completed_logs'] for s in all_category_summaries)
+    total_pending = sum(s['pending_logs'] for s in all_category_summaries)
+    total_cost = sum(s['total_cost'] for s in all_category_summaries)
+    
+    st.markdown("### 📊 Overall Maintenance Summary")
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    with col_s1:
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value'>{total_logs}</div>"
+            "<div class='summary-stat-label'>Total Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_s2:
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value' style='color:#44CC44'>{total_completed}</div>"
+            "<div class='summary-stat-label'>Completed Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_s3:
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value' style='color:#FFAA00'>{total_pending}</div>"
+            "<div class='summary-stat-label'>Pending Logs</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    with col_s4:
+        st.markdown(
+            "<div class='summary-section' style='text-align:center;'>"
+            f"<div class='summary-stat-value' style='color:#4da6ff'>₹{total_cost:,.0f}</div>"
+            "<div class='summary-stat-label'>Total Cost</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
     
     # ==================== 1. CATEGORY SUMMARY CARDS (clickable) ====================
     if all_category_summaries:
@@ -2786,6 +3975,13 @@ def render_category_machine_list():
     
     st.markdown("<h1 class='main-header'>📝 Maintenance Logs</h1>", unsafe_allow_html=True)
     
+    if came_from_analytics_chip("maintenance_logs"):
+    
+        if st.button("← Back to Analytics"):
+    
+            return_to_analytics_from_chip()
+
+    
     if st.button("← Back to Maintenance Logs"):
         st.session_state.maintenance_page = "overview"
         st.session_state.maintenance_category = None
@@ -2875,18 +4071,16 @@ def render_category_machine_list():
                 "☐",
                 help="Select a machine to view details",
                 default=False,
+                width=38,
             ),
             "Machine ID": st.column_config.Column(
                 "Machine ID",
-                width="medium",
             ),
             "Total Logs": st.column_config.Column(
                 "Total Logs",
-                width="small",
             ),
             "Total Cost": st.column_config.Column(
                 "Total Cost",
-                width="small",
             ),
         },
         disabled=["Machine ID", "Total Logs", "Total Cost"],
@@ -3000,28 +4194,116 @@ def render_maintenance_machine_summary():
             unsafe_allow_html=True
         )
     
-    # ==================== MAINTENANCE HISTORY TABLE (from Alert History dataset) ====================
+    # ==================== MAINTENANCE HISTORY TABLE (from actual Maintenance Logs dataset) ====================
     st.markdown("### 📜 Maintenance History")
     
-    if not alerts:
+    # Use actual maintenance logs which contain technician and cost data
+    maintenance_logs = data_store.maintenance_log_service.get_logs_by_machine(machine_id)
+    
+    if not maintenance_logs:
         st.info("No maintenance history found for this machine.")
     else:
+        work_orders = data_store.work_order_service.get_work_orders_by_machine(
+            machine_id,
+            include_completed=True
+        )
+        alert_by_id = {alert.alert_id: alert for alert in alerts}
+        work_order_by_id = {wo.work_order_id: wo for wo in work_orders}
+        used_alert_ids = set()
+
+        def _alert_reason_to_cause(reason: str) -> str:
+            r = (reason or "").lower()
+            if "bearing" in r:
+                return "Worn bearing race"
+            if "refrigerant" in r:
+                return "Refrigerant leakage"
+            if "condenser" in r or "overheating" in r:
+                return "Dust accumulation on coils"
+            if "evaporator" in r or "icing" in r:
+                return "Restricted airflow"
+            if "motor" in r:
+                return "Bearing wear"
+            if "compressor" in r:
+                return "Dirty condenser coil"
+            if "fan" in r:
+                return "Failed fan bearing"
+            if "door" in r or "seal" in r:
+                return "Damaged door gasket"
+            if "cooling" in r:
+                return "Low refrigerant charge"
+            if "drum" in r or "vibration" in r:
+                return "Unbalanced drum assembly"
+            if "pump" in r or "water" in r:
+                return "Pump impeller wear"
+            if "alternator" in r:
+                return "Failed alternator diode"
+            if "fuel" in r:
+                return "Clogged fuel filter"
+            if "voltage" in r or "electrical" in r:
+                return "Loose electrical connection"
+            if "oil" in r:
+                return "Oil leak from gasket"
+            if "coolant" in r:
+                return "Radiator blockage"
+            if "timing" in r or "belt" in r:
+                return "Belt material fatigue"
+            if "spark" in r or "ignition" in r:
+                return "Spark plug electrode wear"
+            if "rpm" in r or "speed" in r:
+                return "Sensor calibration drift"
+            if "overload" in r or "current" in r or "load" in r:
+                return "Excessive load condition"
+            if "performance" in r or "drift" in r:
+                return "Component degradation over time"
+            return "Component degradation over time"
+
+        def _display_severity(alert) -> str:
+            return "NORMAL" if alert.severity.value == "INFO" else alert.severity.value
+
+        def _matching_alert_for_log(log):
+            if log.work_order_id:
+                work_order = work_order_by_id.get(log.work_order_id)
+                if work_order and work_order.alert_id:
+                    linked_alert = alert_by_id.get(work_order.alert_id)
+                    if linked_alert and linked_alert.alert_id not in used_alert_ids:
+                        return linked_alert
+
+            candidates = [
+                alert for alert in alerts
+                if alert.machine_id == log.machine_id and alert.alert_id not in used_alert_ids
+            ]
+            if not candidates:
+                candidates = [alert for alert in alerts if alert.machine_id == log.machine_id]
+            if not candidates:
+                return None
+
+            return min(
+                candidates,
+                key=lambda alert: abs((log.maintenance_date - alert.timestamp).total_seconds())
+            )
+
         history_rows = []
-        for alert in alerts:
-            # Derive cause from reason, matching Machine Details → Alert History logic
-            cause = alert.reason
-            if len(cause) > 50:
-                cause = cause[:50] + "..."
+        for log in maintenance_logs:
+            if log.machine_id != machine_id:
+                continue
+            alert = _matching_alert_for_log(log)
+            if not alert:
+                continue
+            used_alert_ids.add(alert.alert_id)
             history_rows.append({
-                "Machine ID": alert.machine_id,
-                "Date": alert.timestamp.strftime('%Y-%m-%d'),
-                "Condition": alert.severity.value,
-                "Cause": cause,
-                "Technician": "",
-                "Cost": 0,
-                "Status": alert.status
+                "Machine ID": log.machine_id,
+                "Date": log.maintenance_date.strftime('%Y-%m-%d'),
+                "Severity": _display_severity(alert),
+                "Reason": alert.reason,
+                "Cause": _alert_reason_to_cause(alert.reason),
+                "Technician": log.technician,
+                "Cost": log.cost,
+                "Status": getattr(log, "status", "Completed")
             })
-        df_history = pd.DataFrame(history_rows)
+        df_history = pd.DataFrame(
+            history_rows,
+            columns=["Machine ID", "Date", "Severity", "Reason", "Cause", "Technician", "Cost", "Status"]
+        )
         st.dataframe(df_history, use_container_width=True, hide_index=True)
 
 
@@ -3298,6 +4580,18 @@ def pre_route():
     This hook ensures the correct page is set BEFORE the router
     decides which page to render — preventing accidental routing to the wrong module."""
     query_params = st.query_params
+
+    if (
+        not query_params.get("_analytics_page")
+        and st.session_state.get("_analytics_badge_source") == "analytics"
+        and st.session_state.get("_analytics_badge_target") in ("alerts", "maintenance_logs")
+        and st.session_state.get("page") == st.session_state.get("_analytics_badge_target")
+    ):
+        st.session_state.page = "analytics"
+        st.session_state._analytics_badge_target = None
+        st.session_state._analytics_badge_source = None
+        st.session_state._analytics_badge_route_key = None
+        return
     
     # Handle Dashboard KPI card clicks - each goes to its own dedicated page
     if query_params.get("kpi_categories"):
@@ -3359,16 +4653,30 @@ def pre_route():
     if analytics_page:
         analytics_category = query_params.get("_analytics_category", "")
         analytics_filter = query_params.get("_analytics_filter", "")
+        maint_cat = query_params.get("_maint_cat", "")
+        analytics_route_key = f"{analytics_page}|{analytics_category}|{analytics_filter}|{maint_cat}"
+        preserve_history_route = analytics_page in ("alerts", "maintenance_logs")
+        if preserve_history_route and st.session_state.get("_analytics_badge_route_key") == analytics_route_key:
+            return
         if analytics_category:
             st.session_state.analytics_category = analytics_category
         if analytics_filter:
             st.session_state.analytics_chip_filter = analytics_filter
         st.session_state._from_analytics = True
-        maint_cat = query_params.get("_maint_cat", "")
+        if preserve_history_route:
+            st.session_state._analytics_badge_source = "analytics"
+            st.session_state._analytics_badge_target = analytics_page
+            st.session_state._analytics_badge_route_key = analytics_route_key
+        else:
+            st.session_state._analytics_badge_source = None
+            st.session_state._analytics_badge_target = None
+            st.session_state._analytics_badge_route_key = None
         if maint_cat:
             st.session_state.maintenance_category = maint_cat
             st.session_state.maintenance_page = "category_detail"
         st.session_state.page = analytics_page
+        if preserve_history_route:
+            return
         query_params.clear()
         return
 
@@ -3377,6 +4685,7 @@ def pre_route():
 
 def main():
     """Main app router."""
+    ensure_data_consistency_once()
     pre_route()
     render_sidebar()
     
@@ -3410,3 +4719,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

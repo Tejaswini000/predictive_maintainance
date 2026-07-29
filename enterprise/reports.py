@@ -910,13 +910,28 @@ class ReportGenerator:
     def generate_factory_report(self, factory_id: str) -> Report:
         """Generate a comprehensive report for an equipment category."""
         simulator = self._get_simulator()
-        factory_info = simulator.get_all_factories().get(factory_id)
+        factories = simulator.get_all_factories()
+        requested_factory_id = factory_id
+        factory_info = factories.get(factory_id)
+        if not factory_info:
+            normalized = str(factory_id or "").strip().lower().replace("_", " ")
+            for fid, info in factories.items():
+                candidates = {
+                    str(fid).strip().lower(),
+                    str(fid).strip().lower().replace("_", " "),
+                    str(info.get("name", "")).strip().lower(),
+                    str(info.get("name", "")).strip().lower().replace("_", " "),
+                }
+                if normalized in candidates:
+                    factory_id = fid
+                    factory_info = info
+                    break
         if not factory_info:
             return Report(
                 report_id=self._generate_id("category"),
                 report_type="category",
-                title=f"Equipment Report - {factory_id} (Not Found)",
-                data={"error": f"Category {factory_id} not found"}
+                title=f"Equipment Report - {requested_factory_id} (Not Found)",
+                data={"error": f"Category {requested_factory_id} not found"}
             )
 
         machines = simulator.get_factory_machines(factory_id)
