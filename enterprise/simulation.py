@@ -25,6 +25,11 @@ SINGLE SOURCE OF TRUTH:
 - MachineInfo.status is the authoritative state
 - All alerts, work orders, dashboard counts derived from machine state
 - SynchronizationEngine ensures consistency
+
+MACHINE STATUS RULES:
+- If machine has ACTIVE CRITICAL alert → Machine Status = CRITICAL
+- Else if machine has ACTIVE WARNING alert → Machine Status = WARNING
+- Else → Machine Status = NORMAL
 """
 
 import random
@@ -394,6 +399,11 @@ class EnterpriseSimulator:
     - Single source of truth: MachineInfo.status
     - All alerts, work orders, maintenance logs derived from machine state
     - SynchronizationEngine ensures cross-page consistency
+    
+    MACHINE STATUS RULES:
+    - If machine has ACTIVE CRITICAL alert → Machine Status = CRITICAL
+    - Else if machine has ACTIVE WARNING alert → Machine Status = WARNING
+    - Else → Machine Status = NORMAL
     """
 
     _instance: Optional["EnterpriseSimulator"] = None
@@ -879,7 +889,17 @@ class EnterpriseSimulator:
 
     def _update_machine_prediction_state(self, machine: MachineInfo, ml_result: Optional[Dict] = None,
                                          latest_readings: Optional[Dict] = None, persist: bool = True) -> MachineInfo:
-        """Update the machine's condition, health, failure probability, cause, and recommendation from the latest prediction."""
+        """Update the machine's condition, health, failure probability, cause, and recommendation from the latest prediction.
+        
+        NOTE: Machine status is NOT set here. Status is derived from failure_probability
+        by the SynchronizationEngine. This method only updates health_score, 
+        failure_probability, cause, and recommendation.
+        
+        FAILURE PROBABILITY RULES (used by sync engine to derive status):
+        - FP >= 0.25 → CRITICAL
+        - FP >= 0.10 → WARNING
+        - FP <  0.10 → NORMAL
+        """
         if ml_result is None:
             predicted_status = machine.status.value
             confidence = 0.5
@@ -919,18 +939,28 @@ class EnterpriseSimulator:
             else:
                 new_status = MachineStatus.NORMAL
 
-        machine.status = new_status
-        machine.condition = self._status_to_condition(new_status)
-        base_failure_probability = round(
-            max(0.01, min(0.95, (100 - machine.health_score) / 100)),
-            3,
-        )
+        # NOTE: Do NOT set machine.status here. Status is derived from failure_probability
+        # by the SynchronizationEngine. This ensures consistency.
+        
+        # Calculate failure_probability from health_score
+        # FP = (100 - health) / 100 * scaling_factor
+        # Scaling factor ensures FP thresholds match status boundaries:
+        # health < 60 → FP >= 0.25 (CRITICAL)
+        # health 60-84 → FP >= 0.10 (WARNING)
+        # health >= 85 → FP < 0.10 (NORMAL)
+        base_fp = round((100 - machine.health_score) / 100, 3)
+        
         if new_status == MachineStatus.CRITICAL:
-            machine.failure_probability = max(0.41, base_failure_probability)
+            # Ensure FP >= 0.25 for CRITICAL machines
+            machine.failure_probability = max(0.25, base_fp)
         elif new_status == MachineStatus.WARNING:
-            machine.failure_probability = min(0.55, max(0.16, base_failure_probability))
+            # Ensure FP is between 0.10 and 0.249 for WARNING machines
+            machine.failure_probability = min(0.249, max(0.10, base_fp))
         else:
-            machine.failure_probability = min(0.15, base_failure_probability)
+            # Ensure FP < 0.10 for NORMAL machines
+            machine.failure_probability = min(0.099, base_fp)
+        
+        machine.condition = self._status_to_condition(new_status)
         machine.cause = self._build_cause(machine, latest_readings, ml_result)
         machine.maintenance_recommendation = self._build_maintenance_recommendation(
             new_status, machine.health_score, machine.failure_probability
@@ -997,7 +1027,6 @@ class EnterpriseSimulator:
                 purchase_date = _generate_purchase_date(machine_id)
                 machine.purchase_date = purchase_date
 
-            # Ensure purchase_date is not in the future and within 2018-2024 range
             if purchase_date > now or purchase_date < datetime(2018, 1, 1) or purchase_date > datetime(2024, 12, 31):
                 purchase_date = _generate_purchase_date(machine_id)
                 machine.purchase_date = purchase_date
@@ -1141,6 +1170,7 @@ class EnterpriseSimulator:
                     parts_replaced=self._get_parts_for_cause(cause),
                     cost=cost,
                     duration_hours=duration,
+                    downtime_hours=downtime,
                     remarks=f"Maintenance completed. {cause} resolved. Machine returned to healthy operation.",
                     work_order_id=wo.work_order_id,
                     machine_name=machine.name,
@@ -1148,7 +1178,6 @@ class EnterpriseSimulator:
                     description=reason,
                     start_time=wo_date,
                     end_time=maint_date,
-                    downtime_hours=downtime,
                     before_health=round(before_health, 1),
                     after_health=round(after_health, 1),
                     status="Completed",
@@ -1176,17 +1205,6 @@ class EnterpriseSimulator:
                     machine.health_score = random.uniform(85, 100)
             else:
                 machine.health_score = random.uniform(85, 100)
-            
-            # Recalculate status from health
-            if machine.health_score < 60:
-                machine.status = MachineStatus.CRITICAL
-            elif machine.health_score < 85:
-                machine.status = MachineStatus.WARNING
-            else:
-                machine.status = MachineStatus.NORMAL
-            
-            machine.failure_probability = round(max(0.01, (100 - machine.health_score) / 100 * 0.85), 3)
-            machine.condition = self._status_to_condition(machine.status)
             
             # Set operating hours based on purchase date
             machine.operating_hours = random.uniform(
@@ -1298,10 +1316,16 @@ class EnterpriseSimulator:
         1. Applies realistic state transitions
         2. Updates health_score, failure_probability
         3. ML prediction refines the state
-        4. SynchronizationEngine ensures consistent alerts, work orders, logs
+        4. Creates/updates alerts based on health_score
+        5. SynchronizationEngine ensures consistent status, work orders, logs
         
         SINGLE SOURCE OF TRUTH: machine.status is the authoritative state.
         All derived data (alerts, work orders, logs) is synchronized.
+        
+        MACHINE STATUS RULES:
+        - If machine has ACTIVE CRITICAL alert → Machine Status = CRITICAL
+        - Else if machine has ACTIVE WARNING alert → Machine Status = WARNING
+        - Else → Machine Status = NORMAL
         """
         from services import get_data_store, get_sync_engine
         data_store = get_data_store()
@@ -1342,18 +1366,23 @@ class EnterpriseSimulator:
             machine.health_score = round(current_health + drift, 1)
             machine.health_score = max(5, min(100, machine.health_score))
             
-            # ---- Step 3: Update failure probability ----
-            machine.failure_probability = round(
-                max(0.01, min(0.95, (100 - machine.health_score) / 100 * 0.85)), 3
-            )
+            # ---- Step 3: Update failure probability from health_score ----
+            # FP = (100 - health) / 100, scaled to match status thresholds
+            base_fp = round((100 - machine.health_score) / 100, 3)
             
-            # ---- Step 4: Update status based on new health score ----
-            if machine.health_score < 60:
-                machine.status = MachineStatus.CRITICAL
-            elif machine.health_score < 85:
-                machine.status = MachineStatus.WARNING
+            # ---- Step 4: Determine desired status from failure_probability ----
+            # FP >= 0.25 → CRITICAL
+            # FP >= 0.10 → WARNING
+            # FP <  0.10 → NORMAL
+            if base_fp >= 0.25:
+                desired_status = MachineStatus.CRITICAL
+                machine.failure_probability = max(0.25, base_fp)
+            elif base_fp >= 0.10:
+                desired_status = MachineStatus.WARNING
+                machine.failure_probability = min(0.249, max(0.10, base_fp))
             else:
-                machine.status = MachineStatus.NORMAL
+                desired_status = MachineStatus.NORMAL
+                machine.failure_probability = min(0.099, base_fp)
             
             # ---- Step 5: Apply ML prediction ----
             latest_readings = self.get_latest_readings(machine.machine_id)
@@ -1362,14 +1391,16 @@ class EnterpriseSimulator:
             
             # ---- Step 6: Update operating hours ----
             machine.operating_hours += random.uniform(0.8, 2.0)
-            
-            # ---- Step 8: Ensure failure_probability ranges ----
-            if machine.status == MachineStatus.CRITICAL:
-                machine.failure_probability = max(0.41, machine.failure_probability)
-            elif machine.status == MachineStatus.WARNING:
-                machine.failure_probability = min(0.55, max(0.16, machine.failure_probability))
+
+            # ---- Step 7: Create/update/close alert based on failure_probability ----
+            # This is done BEFORE sync so the sync engine can derive status from alerts
+            if machine.failure_probability < 0.10:
+                # Close any existing open alerts
+                data_store.alert_service.close_all_open_alerts_by_machine(machine.machine_id)
             else:
-                machine.failure_probability = min(0.15, machine.failure_probability)
+                # Set machine.status temporarily so auto_create_from_machine_status works
+                machine.status = desired_status
+                data_store.alert_service.auto_create_from_machine_status(machine)
 
             # ---- Step 9: Synchronize all derived data (alerts, work orders, logs) ----
             sync_engine.synchronize_machine(machine)

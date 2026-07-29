@@ -16,6 +16,10 @@ SYNCHRONIZATION RULES:
 4. Maintenance Log lifecycle: Create one log linked to WO. When WO completed → update log.
 5. No duplicates anywhere.
 6. When work order completed → update last_maintenance_date, close alert, calculate next maintenance.
+7. MACHINE STATUS IS DERIVED FROM ACTIVE ALERTS, NOT HEALTH SCORE.
+   - If machine has ACTIVE CRITICAL alert → Machine Status = CRITICAL
+   - Else if machine has ACTIVE WARNING alert → Machine Status = WARNING
+   - Else → Machine Status = NORMAL
 """
 
 import uuid
@@ -780,8 +784,6 @@ class WorkOrderService:
         if machine:
             machine.health_score = after_health
             machine.failure_probability = round(max(0.01, (100 - machine.health_score) / 100 * 0.45), 3)
-            if machine.health_score >= 85:
-                machine.status = MachineStatus.NORMAL
             
             # CRITICAL: Update last_maintenance_date on the machine
             machine.last_maintenance_date = completion_time
@@ -1481,7 +1483,7 @@ class SynchronizationEngine:
     Central synchronization engine that ensures all modules display consistent data.
     
     Whenever machine health changes (simulation, refresh, prediction, Excel update, etc.):
-    1. Recalculate Machine Status from health score
+    1. Recalculate Machine Status from active alerts (single source of truth)
     2. Synchronize Alert to match machine status
     3. Synchronize Work Order to match machine status
     4. Synchronize Maintenance Log to match work order status
@@ -1489,18 +1491,44 @@ class SynchronizationEngine:
     6. All derived data (dashboard counts, analytics, reports) automatically
        reads from the single source of truth.
     
+    MACHINE STATUS RULES:
+    - If machine has an ACTIVE CRITICAL alert → Machine Status = CRITICAL
+    - Else if machine has an ACTIVE WARNING alert → Machine Status = WARNING
+    - Else → Machine Status = NORMAL
+    
     Call synchronize_all() after any state change to ensure consistency.
     """
     
     def __init__(self):
         pass
     
+    def _get_status_from_failure_probability(self, machine: MachineInfo) -> MachineStatus:
+        """
+        Determine machine status from failure probability.
+        
+        This is the SINGLE SOURCE OF TRUTH for machine status.
+        Status is ALWAYS derived from failure_probability.
+        
+        Rules:
+        - FP >= 25%  (0.25) → CRITICAL
+        - FP >= 10%  (0.10) → WARNING
+        - FP <  10%  (0.10) → NORMAL
+        """
+        fp = machine.failure_probability
+        
+        if fp >= 0.25:
+            return MachineStatus.CRITICAL
+        elif fp >= 0.10:
+            return MachineStatus.WARNING
+        else:
+            return MachineStatus.NORMAL
+    
     def synchronize_machine(self, machine: MachineInfo) -> None:
         """
         Synchronize all derived data for a single machine.
         
         Steps:
-        1. Ensure machine.status is correct based on health_score
+        1. Ensure machine.status is correct based on active alerts
         2. Deduplicate any existing duplicates
         3. Synchronize alert FIRST (so work order can link to it)
         4. Synchronize work orders (with alert_id from step 3)
@@ -1512,7 +1540,7 @@ class SynchronizationEngine:
         from simulation import EnterpriseSimulator
         db = get_db()
         
-        # Step 1: Ensure machine status is correct based on health score
+        # Step 1: Ensure machine status is correct based on active alerts
         self._recalculate_status(machine)
         
         data_store = get_data_store()
@@ -1594,36 +1622,41 @@ class SynchronizationEngine:
         return count
     
     def _get_effective_status(self, machine: MachineInfo) -> MachineStatus:
-        """Return the authoritative machine state from ML prediction when available."""
-        ml_prediction = getattr(machine, "ml_prediction", None) or {}
-        predicted_status = ml_prediction.get("predicted_status")
-        if isinstance(predicted_status, str):
-            normalized_status = predicted_status.upper()
-            if normalized_status == "CRITICAL":
-                return MachineStatus.CRITICAL
-            if normalized_status == "WARNING":
-                return MachineStatus.WARNING
-            if normalized_status == "NORMAL":
-                return MachineStatus.NORMAL
-
-        if machine.health_score < 60:
-            return MachineStatus.CRITICAL
-        if machine.health_score < 85:
-            return MachineStatus.WARNING
-        return MachineStatus.NORMAL
+        """
+        Return the authoritative machine state.
+        
+        MACHINE STATUS IS DERIVED FROM FAILURE PROBABILITY.
+        
+        Rules:
+        - FP >= 0.25 → CRITICAL
+        - FP >= 0.10 → WARNING
+        - FP <  0.10 → NORMAL
+        """
+        return self._get_status_from_failure_probability(machine)
 
     def _recalculate_status(self, machine: MachineInfo) -> None:
-        """Recalculate the authoritative machine state while preserving ML-driven decisions."""
+        """
+        Recalculate the authoritative machine state.
+        
+        MACHINE STATUS IS DERIVED FROM FAILURE PROBABILITY.
+        
+        Rules:
+        - FP >= 0.25 → CRITICAL
+        - FP >= 0.10 → WARNING
+        - FP <  0.10 → NORMAL
+        
+        From status:
+        - Alerts are derived (CRITICAL → CRITICAL alert, WARNING → WARNING alert, NORMAL → close alerts)
+        - Health score is informational only, does NOT determine status.
+        """
         machine.status = self._get_effective_status(machine)
         machine.condition = "Critical" if machine.status == MachineStatus.CRITICAL else "Warning" if machine.status == MachineStatus.WARNING else "Normal"
         if not machine.cause:
             machine.cause = "Sensor readings within normal range"
-        if machine.status == MachineStatus.CRITICAL or machine.health_score < 60 or machine.failure_probability >= 0.55:
+        if machine.status == MachineStatus.CRITICAL or machine.failure_probability >= 0.25:
             machine.maintenance_recommendation = "Immediate Inspection Required"
-        elif machine.status == MachineStatus.WARNING or machine.health_score < 85 or machine.failure_probability >= 0.25:
+        elif machine.status == MachineStatus.WARNING or machine.failure_probability >= 0.10:
             machine.maintenance_recommendation = "Within 7 Days"
-        elif machine.failure_probability >= 0.12:
-            machine.maintenance_recommendation = "Within 14 Days"
         else:
             machine.maintenance_recommendation = "Within 30 Days"
     
@@ -1656,11 +1689,11 @@ class SynchronizationEngine:
         issues = []
         
         for machine in all_machines:
-            # Check 1: Machine status follows the authoritative ML-driven state when available
+            # Check 1: Machine status follows the authoritative alert-driven state
             expected_status = self._get_effective_status(machine)
             
             if machine.status != expected_status:
-                issues.append(f"{machine.machine_id}: status={machine.status.value} but health={machine.health_score}% (expected {expected_status.value})")
+                issues.append(f"{machine.machine_id}: status={machine.status.value} but expected {expected_status.value} based on active alerts")
             
             # Check 2: Active alert matches machine status
             active_alert = data_store.alert_service.get_active_alert_by_machine(machine.machine_id)
