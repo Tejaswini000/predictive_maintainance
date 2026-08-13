@@ -12,8 +12,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-from data_ingestion import SensorData, generate_machine_data
-from orchestrator import AIOrchestrator
+from scripts.data_ingestion import SensorData, generate_machine_data
+from scripts.orchestrator import AIOrchestrator
 
 
 class AgenticMaintenanceEngine:

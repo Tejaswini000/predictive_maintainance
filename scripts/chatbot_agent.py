@@ -4,7 +4,7 @@ Optimized Predictive Maintenance Chatbot Agent (RAG + LLM + Caching)
 
 from typing import Dict, Any, List, Optional
 import streamlit as st
-from llm_client import OpenRouterClient, AgenticBase
+from scripts.llm_client import OpenRouterClient, AgenticBase
 
 
 # ==================== KNOWLEDGE BASE ====================

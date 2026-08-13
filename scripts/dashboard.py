@@ -15,13 +15,13 @@ from typing import Dict, List, Optional
 from datetime import datetime
 
 import streamlit as st
-from data_ingestion import generate_simulated_sensor_data, load_csv_from_upload
-from llm_client import OpenRouterClient
-from monitoring_agent import MonitoringAgent
-from diagnostic_agent import DiagnosticAgent
-from decision_agent import DecisionAgent
-from maintenance_planner_agent import MaintenancePlannerAgent
-from chatbot_agent import ChatbotAgent
+from scripts.data_ingestion import generate_simulated_sensor_data, load_csv_from_upload
+from scripts.llm_client import OpenRouterClient
+from scripts.monitoring_agent import MonitoringAgent
+from scripts.diagnostic_agent import DiagnosticAgent
+from scripts.decision_agent import DecisionAgent
+from scripts.maintenance_planner_agent import MaintenancePlannerAgent
+from scripts.chatbot_agent import ChatbotAgent
 
 try:
     from streamlit import st_autorefresh

@@ -20,7 +20,7 @@ for path in (str(PACKAGE_DIR), str(PROJECT_ROOT)):
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
-from chatbot_agent import (
+from scripts.chatbot_agent import (
     ChatbotAgent, extract_machine_id, is_machine_related,
     MAINTENANCE_KNOWLEDGE_BASE, KNOWLEDGE_BASE
 )
@@ -37,14 +37,22 @@ from ml_model import get_predictor, predict_machine_status
 
 ACTIVE_MACHINE_TYPES = {
     "refrigerator": MachineType.REFRIGERATOR,
+    "refrigerators": MachineType.REFRIGERATOR,
     "fridge": MachineType.REFRIGERATOR,
+    "fridges": MachineType.REFRIGERATOR,
     "washing machine": MachineType.WASHING_MACHINE,
+    "washing machines": MachineType.WASHING_MACHINE,
     "washer": MachineType.WASHING_MACHINE,
+    "washers": MachineType.WASHING_MACHINE,
     "air conditioner": MachineType.AIR_CONDITIONER,
+    "air conditioners": MachineType.AIR_CONDITIONER,
     "ac": MachineType.AIR_CONDITIONER,
     "generator": MachineType.GENERATOR,
+    "generators": MachineType.GENERATOR,
     "car engine": MachineType.CAR_ENGINE,
+    "car engines": MachineType.CAR_ENGINE,
     "engine": MachineType.CAR_ENGINE,
+    "engines": MachineType.CAR_ENGINE,
 }
 
 ACTIVE_MACHINE_ID_PATTERN = r"(REF-\d+|WM-\d+|AC-\d+|GEN-\d+|ENG-\d+)"
@@ -59,6 +67,37 @@ CONDITION_SYNONYMS = {
     MachineStatus.CRITICAL: [
         "critical", "urgent", "high risk", "high-risk"
     ],
+}
+
+# Category keywords mapped to MachineType for robust extraction
+CATEGORY_KEYWORDS = {
+    "refrigerator": MachineType.REFRIGERATOR,
+    "refrigerators": MachineType.REFRIGERATOR,
+    "fridge": MachineType.REFRIGERATOR,
+    "fridges": MachineType.REFRIGERATOR,
+    "washing machine": MachineType.WASHING_MACHINE,
+    "washing machines": MachineType.WASHING_MACHINE,
+    "washer": MachineType.WASHING_MACHINE,
+    "washers": MachineType.WASHING_MACHINE,
+    "air conditioner": MachineType.AIR_CONDITIONER,
+    "air conditioners": MachineType.AIR_CONDITIONER,
+    "ac": MachineType.AIR_CONDITIONER,
+    "generator": MachineType.GENERATOR,
+    "generators": MachineType.GENERATOR,
+    "car engine": MachineType.CAR_ENGINE,
+    "car engines": MachineType.CAR_ENGINE,
+    "engine": MachineType.CAR_ENGINE,
+    "engines": MachineType.CAR_ENGINE,
+}
+
+# Status keywords for extraction
+STATUS_KEYWORDS = {
+    "normal": MachineStatus.NORMAL,
+    "healthy": MachineStatus.NORMAL,
+    "good": MachineStatus.NORMAL,
+    "warning": MachineStatus.WARNING,
+    "critical": MachineStatus.CRITICAL,
+    "urgent": MachineStatus.CRITICAL,
 }
 
 
@@ -202,7 +241,8 @@ class EnterpriseCopilot:
             return False
         list_terms = [
             "machine", "machines", "show", "list", "which", "what are",
-            "what's", "give me", "display"
+            "what's", "give me", "display", "all", "log", "logs",
+            "maintenance", "work order", "alert", "alerts"
         ]
         return any(term in q for term in list_terms)
 
@@ -266,6 +306,186 @@ class EnterpriseCopilot:
                 return match.group(1)
         return None
 
+    # ==================== CATEGORY AND STATUS EXTRACTION ====================
+
+    def _extract_machine_category(self, q: str) -> Optional[MachineType]:
+        """
+        Extract the machine category from the query.
+        Returns the MachineType if found, None otherwise.
+        """
+        normalized_q = re.sub(r"\s+", " ", q.lower()).strip()
+        # Sort by length descending to match longer phrases first (e.g., "washing machine" before "washer")
+        for keyword, machine_type in sorted(CATEGORY_KEYWORDS.items(), key=lambda x: len(x[0]), reverse=True):
+            if re.search(rf"\b{re.escape(keyword)}\b", normalized_q):
+                return machine_type
+        return None
+
+    def _extract_machine_status(self, q: str) -> Optional[MachineStatus]:
+        """
+        Extract the machine status from the query.
+        Returns the MachineStatus if found, None otherwise.
+        """
+        normalized_q = re.sub(r"\s+", " ", q.lower()).strip()
+        for keyword, status in STATUS_KEYWORDS.items():
+            if re.search(rf"\b{re.escape(keyword)}\b", normalized_q):
+                return status
+        return None
+
+    def _get_machine_ids_by_category(self, category: MachineType) -> List[str]:
+        """Get all machine IDs for a given category."""
+        machines = self.simulator.get_machines_by_type(category)
+        return [m.machine_id for m in machines]
+
+    def _get_machine_ids_by_category_and_status(self, category: MachineType, status: MachineStatus) -> List[str]:
+        """Get all machine IDs for a given category and status."""
+        machines = self.simulator.get_machines_by_type(category)
+        return [m.machine_id for m in machines if m.status == status]
+
+    def _get_machine_ids_by_status(self, status: MachineStatus) -> List[str]:
+        """Get all machine IDs with a given status across all categories."""
+        all_machines = self.simulator.get_all_machines()
+        return [m.machine_id for m in all_machines if m.status == status]
+
+    # ==================== FILTERED RETRIEVAL METHODS ====================
+
+    def _retrieve_maintenance_logs(self, machine_ids: List[str]) -> List[MaintenanceLog]:
+        """Retrieve maintenance logs filtered by machine IDs."""
+        all_logs = self.data_store.maintenance_log_service.get_all_logs()
+        return [log for log in all_logs if log.machine_id in machine_ids]
+
+    def _retrieve_work_orders(self, machine_ids: List[str]) -> List[WorkOrder]:
+        """Retrieve work orders filtered by machine IDs."""
+        all_orders = self.data_store.work_order_service.get_all_work_orders()
+        return [order for order in all_orders if order.machine_id in machine_ids]
+
+    def _retrieve_alerts(self, machine_ids: List[str]) -> List[Alert]:
+        """Retrieve alerts filtered by machine IDs."""
+        all_alerts = self.data_store.alert_service.get_all_alerts()
+        return [alert for alert in all_alerts if alert.machine_id in machine_ids]
+
+    def _format_enum_value(self, value: Any) -> str:
+        """Format enum values into readable text."""
+        if value is None:
+            return "N/A"
+        value_str = str(value)
+        # Handle MaintenanceType enum like "MaintenanceType.PREVENTIVE"
+        if "MaintenanceType." in value_str:
+            return value_str.split(".")[-1].title()
+        # Handle status enums like "NORMAL", "WARNING", "CRITICAL"
+        if value_str in ("NORMAL", "WARNING", "CRITICAL", "UNKNOWN", "OFFLINE", "MAINTENANCE"):
+            return value_str.title()
+        return value_str
+
+    def _format_maintenance_logs(self, logs: List[MaintenanceLog], category_name: str, status_filter: Optional[str] = None) -> str:
+        """Format maintenance logs into a Markdown table."""
+        if not logs:
+            if status_filter:
+                return f"No maintenance logs found for {status_filter} {category_name}."
+            return f"No maintenance logs found for {category_name}."
+        
+        # Sort by date descending
+        logs_sorted = sorted(logs, key=lambda x: x.maintenance_date if hasattr(x, 'maintenance_date') and x.maintenance_date else datetime.min, reverse=True)
+        
+        total = len(logs_sorted)
+        display_logs = logs_sorted[:25]
+        truncated = total > 25
+        
+        heading = f"## Maintenance Logs - {category_name}"
+        if status_filter:
+            heading = f"## Maintenance Logs - {status_filter} {category_name}"
+        
+        result = f"{heading}\n\n"
+        result += "| Machine ID | Machine Name | Date | Maintenance Type | Issue | Action Taken | Cost |\n"
+        result += "|------------|--------------|------|------------------|-------|--------------|------|\n"
+        
+        for log in display_logs:
+            machine = self.simulator.get_machine(log.machine_id)
+            machine_name = machine.name if machine else log.machine_id
+            maint_date = log.maintenance_date.strftime('%Y-%m-%d') if hasattr(log, 'maintenance_date') and log.maintenance_date else 'N/A'
+            maint_type = self._format_enum_value(log.maintenance_type if hasattr(log, 'maintenance_type') else 'N/A')
+            issue = (log.issue if hasattr(log, 'issue') and log.issue else log.description if hasattr(log, 'description') and log.description else 'N/A')
+            action = (log.action_taken if hasattr(log, 'action_taken') and log.action_taken else 'N/A')
+            cost = log.cost if hasattr(log, 'cost') else 0
+            result += f"| {log.machine_id} | {machine_name} | {maint_date} | {maint_type} | {issue} | {action} | ₹{cost:.2f} |\n"
+        
+        result += f"\n**Total Records: {total}**"
+        if truncated:
+            result += f" (showing first 25)"
+        return result
+
+    def _format_work_orders(self, orders: List[WorkOrder], category_name: str, status_filter: Optional[str] = None) -> str:
+        """Format work orders into a Markdown table."""
+        if not orders:
+            if status_filter:
+                return f"No work orders found for {status_filter} {category_name}."
+            return f"No work orders found for {category_name}."
+        
+        orders_sorted = sorted(orders, key=lambda x: x.created_date if hasattr(x, 'created_date') and x.created_date else datetime.min, reverse=True)
+        
+        total = len(orders_sorted)
+        display_orders = orders_sorted[:25]
+        truncated = total > 25
+        
+        heading = f"## Work Orders - {category_name}"
+        if status_filter:
+            heading = f"## Work Orders - {status_filter} {category_name}"
+        
+        result = f"{heading}\n\n"
+        result += "| Work Order ID | Machine | Priority | Assigned To | Status | Created Date |\n"
+        result += "|---------------|---------|----------|-------------|--------|--------------|\n"
+        
+        for order in display_orders:
+            machine = self.simulator.get_machine(order.machine_id)
+            machine_name = machine.name if machine else order.machine_id
+            wo_id = order.work_order_id if hasattr(order, 'work_order_id') else 'N/A'
+            created = order.created_date.strftime('%Y-%m-%d') if hasattr(order, 'created_date') and order.created_date else 'N/A'
+            title = order.title if hasattr(order, 'title') else 'N/A'
+            status = self._format_enum_value(order.status.value if hasattr(order, 'status') else 'N/A')
+            priority = order.priority if hasattr(order, 'priority') else 'N/A'
+            assigned = order.assigned_technician if hasattr(order, 'assigned_technician') else 'Unassigned'
+            result += f"| {wo_id} | {machine_name} ({order.machine_id}) | {priority} | {assigned} | {status} | {created} |\n"
+        
+        result += f"\n**Total Records: {total}**"
+        if truncated:
+            result += f" (showing first 25)"
+        return result
+
+    def _format_alerts(self, alerts: List[Alert], category_name: str, status_filter: Optional[str] = None) -> str:
+        """Format alerts into a Markdown table."""
+        if not alerts:
+            if status_filter:
+                return f"No alerts found for {status_filter} {category_name}."
+            return f"No alerts found for {category_name}."
+        
+        alerts_sorted = sorted(alerts, key=lambda x: x.timestamp if hasattr(x, 'timestamp') and x.timestamp else datetime.min, reverse=True)
+        
+        total = len(alerts_sorted)
+        display_alerts = alerts_sorted[:25]
+        truncated = total > 25
+        
+        heading = f"## Alerts - {category_name}"
+        if status_filter:
+            heading = f"## Alerts - {status_filter} {category_name}"
+        
+        result = f"{heading}\n\n"
+        result += "| Alert ID | Machine | Severity | Issue | Date | Status |\n"
+        result += "|----------|---------|----------|-------|------|--------|\n"
+        
+        for alert in display_alerts:
+            machine = self.simulator.get_machine(alert.machine_id)
+            machine_name = machine.name if machine else alert.machine_id
+            alert_id = alert.alert_id if hasattr(alert, 'alert_id') else 'N/A'
+            ts = alert.timestamp.strftime('%Y-%m-%d') if hasattr(alert, 'timestamp') and alert.timestamp else 'N/A'
+            severity = self._format_enum_value(alert.severity.value if hasattr(alert, 'severity') else 'N/A')
+            reason = alert.reason if hasattr(alert, 'reason') else 'N/A'
+            status = alert.status if hasattr(alert, 'status') else 'N/A'
+            result += f"| {alert_id} | {machine_name} ({alert.machine_id}) | {severity} | {reason} | {ts} | {status} |\n"
+        
+        result += f"\n**Total Records: {total}**"
+        if truncated:
+            result += f" (showing first 25)"
+        return result
+
     # ==================== ANSWER GENERATORS ====================
 
     def _answer_machine_condition_list(self, q: str) -> str:
@@ -303,16 +523,16 @@ class EnterpriseCopilot:
             )
 
         result = f"## {status_title} ({len(filtered)})\n\n"
+        result += "| Machine ID | Machine Name | Category | Health Score | Failure Probability | Status |\n"
+        result += "|------------|--------------|----------|--------------|---------------------|--------|\n"
         for machine in filtered:
             result += (
-                f"- **{machine.machine_id} - {machine.name}** | "
-                f"Category: {machine.machine_category} | "
-                f"Health Score: {machine.health_score:.1f}% | "
-                f"Failure Probability: {machine.failure_probability * 100:.1f}% | "
-                f"Current Status: {machine.status.value}\n"
+                f"| {machine.machine_id} | {machine.name} | {machine.machine_category} | "
+                f"{machine.health_score:.1f}% | {machine.failure_probability * 100:.1f}% | "
+                f"{self._format_enum_value(machine.status.value)} |\n"
             )
 
-        result += f"\n**Total {status_title}: {len(filtered)}**"
+        result += f"\n**Total Records: {len(filtered)}**"
         return result
 
     def _answer_machine_question(self, machine_id: str, question: str) -> str:
@@ -669,7 +889,7 @@ class EnterpriseCopilot:
         finfo = self.simulator.get_all_factories()[factory_id]
         analytics = self.analytics.get_factory_analytics(factory_id)
         
-        result = f"## �️ Category Summary: {finfo['name']}\n\n"
+        result = f"## 🏭 Category Summary: {finfo['name']}\n\n"
         result += f"**Total Machines**: {len(machines)}\n"
         result += f"**Manufacturers**: {len(set(m.manufacturer for m in machines))}\n\n"
         
@@ -766,38 +986,134 @@ class EnterpriseCopilot:
         return result
 
     def _answer_machine_type_query(self, q: str) -> str:
-        """Answer questions about a specific machine type."""
-        for kw, mtype in ACTIVE_MACHINE_TYPES.items():
-            if kw in q:
-                machines = self.simulator.get_machines_by_type(mtype)
-                if not machines:
-                    return f"❌ No {mtype.value}s found."
-                
-                avg_health = sum(m.health_score for m in machines) / len(machines)
-                critical = sum(1 for m in machines if m.status == MachineStatus.CRITICAL)
-                warning = sum(1 for m in machines if m.status == MachineStatus.WARNING)
-                
-                result = f"## 🔧 {mtype.value}s Summary\n\n"
-                result += f"**Total**: {len(machines)}\n"
-                result += f"**Average Health**: {avg_health:.1f}%\n"
-                result += f"- 🔴 Critical: {critical}\n"
-                result += f"- 🟡 Warning: {warning}\n"
-                result += f"- ✅ Normal: {len(machines) - critical - warning}\n\n"
-                
-                result += "| ID | Name | Health | Status | Category | Manufacturer | Model |\n"
-                result += "|----|------|--------|--------|----------|--------------|-------|\n"
-                for m in machines:
-                    result += f"| {m.machine_id} | {m.name} | {m.health_score}% | {m.status.value} | {m.machine_category} | {m.manufacturer} | {m.model_number} |\n"
-                
-                return result
+        """
+        Answer questions about a specific machine type.
+        Enhanced to handle maintenance logs, work orders, alerts, and health queries
+        with proper category and status filtering.
+        """
+        # Extract category and status from the query
+        category = self._extract_machine_category(q)
+        status = self._extract_machine_status(q)
         
-        return "Please specify an equipment type such as Refrigerator, Washing Machine, Air Conditioner, Generator, or Car Engine."
+        if not category:
+            # Fall back to original behavior
+            for kw, mtype in ACTIVE_MACHINE_TYPES.items():
+                if kw in q:
+                    machines = self.simulator.get_machines_by_type(mtype)
+                    if not machines:
+                        return f"❌ No {mtype.value}s found."
+                    
+                    avg_health = sum(m.health_score for m in machines) / len(machines)
+                    critical = sum(1 for m in machines if m.status == MachineStatus.CRITICAL)
+                    warning = sum(1 for m in machines if m.status == MachineStatus.WARNING)
+                    
+                    result = f"## 🔧 {mtype.value}s Summary\n\n"
+                    result += f"**Total**: {len(machines)}\n"
+                    result += f"**Average Health**: {avg_health:.1f}%\n"
+                    result += f"- 🔴 Critical: {critical}\n"
+                    result += f"- 🟡 Warning: {warning}\n"
+                    result += f"- ✅ Normal: {len(machines) - critical - warning}\n\n"
+                    
+                    result += "| ID | Name | Health | Status | Category | Manufacturer | Model |\n"
+                    result += "|----|------|--------|--------|----------|--------------|-------|\n"
+                    for m in machines:
+                        result += f"| {m.machine_id} | {m.name} | {m.health_score}% | {m.status.value} | {m.machine_category} | {m.manufacturer} | {m.model_number} |\n"
+                    
+                    return result
+            
+            return "Please specify an equipment type such as Refrigerator, Washing Machine, Air Conditioner, Generator, or Car Engine."
+        
+        category_name = category.value
+        machine_ids = self._get_machine_ids_by_category(category)
+        
+        if not machine_ids:
+            return f"No relevant information found for the requested machine category."
+        
+        # Determine what the user is asking for
+        is_maintenance_query = any(term in q for term in ["maintenance log", "maintenance history", "maintenance record", "service history", "repair history"])
+        is_work_order_query = any(term in q for term in ["work order", "workorder", "wo"])
+        is_alert_query = any(term in q for term in ["alert", "alarm", "notification"])
+        is_health_query = any(term in q for term in ["health", "status", "condition"])
+        
+        # Apply status filter if specified
+        if status:
+            status_filtered_ids = self._get_machine_ids_by_category_and_status(category, status)
+            if not status_filtered_ids:
+                return f"No machines found with {status.value} status in the requested category."
+            machine_ids = status_filtered_ids
+        
+        # Route to the appropriate handler based on query type
+        if is_maintenance_query:
+            logs = self._retrieve_maintenance_logs(machine_ids)
+            status_str = status.value if status else None
+            return self._format_maintenance_logs(logs, category_name, status_str)
+        elif is_work_order_query:
+            orders = self._retrieve_work_orders(machine_ids)
+            status_str = status.value if status else None
+            return self._format_work_orders(orders, category_name, status_str)
+        elif is_alert_query:
+            alerts = self._retrieve_alerts(machine_ids)
+            status_str = status.value if status else None
+            return self._format_alerts(alerts, category_name, status_str)
+        elif is_health_query or status:
+            # Show machines filtered by category and optionally status
+            machines = self.simulator.get_machines_by_type(category)
+            if status:
+                machines = [m for m in machines if m.status == status]
+            
+            if not machines:
+                if status:
+                    return f"No machines found with {status.value} status in the requested category."
+                return f"No {category_name}s found."
+            
+            avg_health = sum(m.health_score for m in machines) / len(machines)
+            critical = sum(1 for m in machines if m.status == MachineStatus.CRITICAL)
+            warning = sum(1 for m in machines if m.status == MachineStatus.WARNING)
+            normal = sum(1 for m in machines if m.status == MachineStatus.NORMAL)
+            
+            status_tag = f" {status.value}" if status else ""
+            result = f"## 🔧 {category_name}s{status_tag} Summary\n\n"
+            result += f"**Total**: {len(machines)}\n"
+            result += f"**Average Health**: {avg_health:.1f}%\n"
+            result += f"- 🔴 Critical: {critical}\n"
+            result += f"- 🟡 Warning: {warning}\n"
+            result += f"- ✅ Normal: {normal}\n\n"
+            
+            result += "| ID | Name | Health | Status | Category | Manufacturer | Model |\n"
+            result += "|----|------|--------|--------|----------|--------------|-------|\n"
+            for m in machines:
+                result += f"| {m.machine_id} | {m.name} | {m.health_score}% | {m.status.value} | {m.machine_category} | {m.manufacturer} | {m.model_number} |\n"
+            
+            return result
+        else:
+            # Default: show summary for the category
+            machines = self.simulator.get_machines_by_type(category)
+            if not machines:
+                return f"No {category_name}s found."
+            
+            avg_health = sum(m.health_score for m in machines) / len(machines)
+            critical = sum(1 for m in machines if m.status == MachineStatus.CRITICAL)
+            warning = sum(1 for m in machines if m.status == MachineStatus.WARNING)
+            
+            result = f"## 🔧 {category_name}s Summary\n\n"
+            result += f"**Total**: {len(machines)}\n"
+            result += f"**Average Health**: {avg_health:.1f}%\n"
+            result += f"- 🔴 Critical: {critical}\n"
+            result += f"- 🟡 Warning: {warning}\n"
+            result += f"- ✅ Normal: {len(machines) - critical - warning}\n\n"
+            
+            result += "| ID | Name | Health | Status | Category | Manufacturer | Model |\n"
+            result += "|----|------|--------|--------|----------|--------------|-------|\n"
+            for m in machines:
+                result += f"| {m.machine_id} | {m.name} | {m.health_score}% | {m.status.value} | {m.machine_category} | {m.manufacturer} | {m.model_number} |\n"
+            
+            return result
 
     def _answer_overall_status(self) -> str:
         """Give overall enterprise status."""
         stats = self.simulator.get_stats()
         
-        result = "## �️ Enterprise Overall Status\n\n"
+        result = "## 🏭 Enterprise Overall Status\n\n"
         result += f"**Equipment Categories**: {stats.get('total_categories', stats['total_factories'])}\n"
         result += f"**Total Machines**: {stats['total_machines']}\n"
         result += f"**Average Health**: {stats['average_health']}%\n"

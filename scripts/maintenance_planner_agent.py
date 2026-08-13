@@ -5,7 +5,7 @@ Generates maintenance plans based on root causes and severity using LLM-powered 
 """
 
 from typing import Dict, List, Any, Optional
-from llm_client import OpenRouterClient, AgenticBase
+from scripts.llm_client import OpenRouterClient, AgenticBase
 
 
 class MaintenancePlannerAgent(AgenticBase):

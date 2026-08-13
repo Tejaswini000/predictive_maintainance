@@ -7,8 +7,8 @@ from __future__ import annotations
 import os
 from pprint import pprint
 
-from data_ingestion import create_sample_csv, generate_machine_data
-from model_engine import AgenticMaintenanceEngine
+from scripts.data_ingestion import create_sample_csv, generate_machine_data
+from scripts.model_engine import AgenticMaintenanceEngine
 
 
 def run_simulated_agentic_example() -> None:

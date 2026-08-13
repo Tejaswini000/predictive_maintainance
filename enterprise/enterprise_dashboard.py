@@ -31,7 +31,7 @@ from analytics import AnalyticsEngine, get_analytics_engine, TrendAnalyzer
 from services import get_data_store, WorkOrderService, AlertService, infer_alert_cause_from_reason
 from reports import ReportGenerator, get_report_generator
 from enterprise_chatbot import EnterpriseCopilot
-from llm_client import OpenRouterClient
+from scripts.llm_client import OpenRouterClient
 
 # ==================== PAGE CONFIG ====================
 
@@ -643,10 +643,6 @@ def render_sidebar():
             st.session_state.data_refreshed = True
             st.rerun()
         
-        if st.button("🎲 Generate Random Events", use_container_width=True):
-            _generate_random_events()
-            st.rerun()
-        
         st.markdown("---")
         
         # Statistics Summary
@@ -690,8 +686,8 @@ def _generate_random_events():
 
 def render_dashboard():
     """Render the main enterprise dashboard with KPIs and charts."""
-    st.markdown("<h1 class='main-header'>Equipment Fleet Dashboard</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='sub-header'>Real-time monitoring across all equipment categories</p>", unsafe_allow_html=True)
+    st.markdown("<h1 class='main-header'>Predictive Maintenance Dashboard</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Monitor equipment health, predict potential failures, and enable proactive maintenance.</p>", unsafe_allow_html=True)
     st.markdown("---")
     
     stats = simulator.get_stats()

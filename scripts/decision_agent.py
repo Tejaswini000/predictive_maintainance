@@ -5,7 +5,7 @@ Suggests actions based on diagnostic results and severity level using LLM-powere
 """
 
 from typing import Dict, List, Any, Optional
-from llm_client import OpenRouterClient, AgenticBase
+from scripts.llm_client import OpenRouterClient, AgenticBase
 
 
 class DecisionAgent(AgenticBase):

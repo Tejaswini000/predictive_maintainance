@@ -3,3 +3,35 @@
 !.env.example
 *.db
 enterprise/predictive_maintenance.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build and coverage artifacts
+build/
+dist/
+coverage/
+htmlcov/
+*.egg-info/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+~$*
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

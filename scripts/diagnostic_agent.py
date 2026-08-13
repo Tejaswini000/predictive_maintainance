@@ -6,7 +6,7 @@ to identify likely root causes.
 """
 
 from typing import Dict, List, NamedTuple, Any, Optional
-from llm_client import OpenRouterClient, AgenticBase
+from scripts.llm_client import OpenRouterClient, AgenticBase
 
 
 class SensorData(NamedTuple):

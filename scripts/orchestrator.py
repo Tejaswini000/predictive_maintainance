@@ -15,11 +15,11 @@ Output is a machine-wise structured response.
 import os
 from typing import Dict, List, NamedTuple, Any, Optional
 from datetime import datetime
-from llm_client import OpenRouterClient
-from monitoring_agent import MonitoringAgent
-from diagnostic_agent import DiagnosticAgent
-from decision_agent import DecisionAgent
-from maintenance_planner_agent import MaintenancePlannerAgent
+from scripts.llm_client import OpenRouterClient
+from scripts.monitoring_agent import MonitoringAgent
+from scripts.diagnostic_agent import DiagnosticAgent
+from scripts.decision_agent import DecisionAgent
+from scripts.maintenance_planner_agent import MaintenancePlannerAgent
 
 
 class SensorData(NamedTuple):
